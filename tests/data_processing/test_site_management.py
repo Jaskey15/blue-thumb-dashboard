@@ -30,6 +30,7 @@ from data_processing.merge_sites import (
     analyze_coordinate_duplicates,
     determine_preferred_site,
     find_duplicate_coordinate_groups,
+    merge_duplicate_sites,
     transfer_site_data,
 )
 
@@ -437,6 +438,115 @@ class TestSiteManagement(unittest.TestCase):
             # Should return only the duplicate sites (4 out of 5)
             self.assertEqual(len(result), 4)
 
+    @patch('data_processing.merge_sites.get_connection')
+    def test_find_duplicate_coordinate_groups_boundary_safe_detects_rounding_boundary(self, mock_get_connection):
+        """Test boundary-safe mode catches near-duplicates missed by ROUND(lat, 3) binning."""
+        mock_conn = MagicMock()
+        mock_get_connection.return_value = mock_conn
+
+        # These points are ~0.22m apart but round into different 0.001-degree bins.
+        near_boundary_sites = pd.DataFrame({
+            'site_id': [1, 2],
+            'site_name': ['Site_A (Upstream)', 'Site_A (Downstream)'],
+            'rounded_lat': [35.124, 35.123],
+            'rounded_lon': [-97.5, -97.5],
+            'latitude': [35.123501, 35.123499],
+            'longitude': [-97.5, -97.5],
+            'county': [None, None],
+            'river_basin': [None, None],
+            'ecoregion': [None, None],
+        })
+
+        with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
+            mock_read_sql.return_value = near_boundary_sites
+
+            result_default = find_duplicate_coordinate_groups()
+            self.assertTrue(result_default.empty)
+
+            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=50.0)
+            self.assertEqual(len(result_boundary_safe), 2)
+            self.assertIn('group_id', result_boundary_safe.columns)
+            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+
+    @patch('data_processing.merge_sites.get_connection')
+    def test_find_duplicate_coordinate_groups_boundary_safe_respects_threshold(self, mock_get_connection):
+        """Test boundary-safe mode does not create clusters when points exceed threshold."""
+        mock_conn = MagicMock()
+        mock_get_connection.return_value = mock_conn
+
+        far_sites = pd.DataFrame({
+            'site_id': [1, 2],
+            'site_name': ['Site_Far_A', 'Site_Far_B'],
+            'rounded_lat': [35.124, 35.123],
+            'rounded_lon': [-97.5, -97.5],
+            'latitude': [35.123501, 35.124000],
+            'longitude': [-97.5, -97.5],
+            'county': [None, None],
+            'river_basin': [None, None],
+            'ecoregion': [None, None],
+        })
+
+        with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
+            mock_read_sql.return_value = far_sites
+            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=10.0)
+            self.assertTrue(result_boundary_safe.empty)
+            self.assertIn('group_id', result_boundary_safe.columns)
+
+    @patch('data_processing.merge_sites.get_connection')
+    def test_find_duplicate_coordinate_groups_boundary_safe_transitive_closure(self, mock_get_connection):
+        """Test boundary-safe clusters are transitive (A~B and B~C implies A,B,C grouped)."""
+        mock_conn = MagicMock()
+        mock_get_connection.return_value = mock_conn
+
+        chain_sites = pd.DataFrame({
+            'site_id': [1, 2, 3],
+            'site_name': ['Site_Chain_A', 'Site_Chain_B', 'Site_Chain_C'],
+            'rounded_lat': [35.123, 35.124, 35.125],
+            'rounded_lon': [-97.5, -97.5, -97.5],
+            'latitude': [35.123000, 35.123100, 35.123200],
+            'longitude': [-97.5, -97.5, -97.5],
+            'county': [None, None, None],
+            'river_basin': [None, None, None],
+            'ecoregion': [None, None, None],
+        })
+
+        with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
+            mock_read_sql.return_value = chain_sites
+
+            result_default = find_duplicate_coordinate_groups()
+            self.assertTrue(result_default.empty)
+
+            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=15.0)
+            self.assertEqual(len(result_boundary_safe), 3)
+            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+
+    @patch('data_processing.merge_sites.get_connection')
+    def test_find_duplicate_coordinate_groups_boundary_safe_negative_longitude_bins(self, mock_get_connection):
+        """Test boundary-safe detection works with negative longitude floor-bin boundaries."""
+        mock_conn = MagicMock()
+        mock_get_connection.return_value = mock_conn
+
+        negative_lon_sites = pd.DataFrame({
+            'site_id': [1, 2],
+            'site_name': ['NegLon_A', 'NegLon_B'],
+            'rounded_lat': [35.124, 35.123],
+            'rounded_lon': [-97.5, -97.5],
+            'latitude': [35.123501, 35.123499],
+            'longitude': [-97.500001, -97.499999],
+            'county': [None, None],
+            'river_basin': [None, None],
+            'ecoregion': [None, None],
+        })
+
+        with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
+            mock_read_sql.return_value = negative_lon_sites
+            result_default = find_duplicate_coordinate_groups()
+            self.assertTrue(result_default.empty)
+
+            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=50.0)
+            self.assertEqual(len(result_boundary_safe), 2)
+            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+
     def test_determine_preferred_site_updated_chemical_priority(self):
         """Test site selection prioritizes updated_chemical_data sites."""
         group = self.sample_sites_with_duplicates[
@@ -536,6 +646,107 @@ class TestSiteManagement(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn('total_duplicate_sites', result)
         self.assertEqual(result['total_duplicate_sites'], 2)
+
+    @patch('data_processing.merge_sites.close_connection')
+    @patch('data_processing.merge_sites.get_connection')
+    @patch('data_processing.merge_sites.find_duplicate_coordinate_groups')
+    @patch('data_processing.merge_sites.load_csv_files')
+    def test_analyze_coordinate_duplicates_boundary_safe_with_data(
+        self,
+        mock_load_csv,
+        mock_find_dupes,
+        mock_get_connection,
+        mock_close_connection,
+    ):
+        """Test analyzing boundary-safe clusters reports groups and uses group_id labels."""
+        mock_load_csv.return_value = (
+            pd.DataFrame({'SiteName': ['Site A', 'Site B']}),
+            pd.DataFrame({'Site Name': ['Site_A (Upstream)']}),
+            pd.DataFrame({'SiteName': []}),
+        )
+
+        df = pd.DataFrame({
+            'site_id': [1, 2],
+            'site_name': ['Site_A (Upstream)', 'Site_A (Downstream)'],
+            'rounded_lat': [35.124, 35.123],
+            'rounded_lon': [-97.5, -97.5],
+            'latitude': [35.123501, 35.123499],
+            'longitude': [-97.5, -97.5],
+            'county': [None, None],
+            'river_basin': [None, None],
+            'ecoregion': [None, None],
+            'group_id': [0, 0],
+        })
+        mock_find_dupes.return_value = df
+
+        mock_conn = MagicMock()
+        mock_get_connection.return_value = mock_conn
+
+        result = analyze_coordinate_duplicates(boundary_safe=True)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['total_duplicate_sites'], 2)
+        self.assertEqual(result['duplicate_groups'], 1)
+        self.assertTrue(any('group_id=' in ex['coordinates'] for ex in result['examples']))
+
+    @patch('data_processing.merge_sites.update_csv_files_with_mapping')
+    @patch('data_processing.merge_sites.update_site_metadata')
+    @patch('data_processing.merge_sites.transfer_site_data')
+    @patch('data_processing.merge_sites.find_duplicate_coordinate_groups')
+    @patch('data_processing.merge_sites.load_csv_files')
+    @patch('data_processing.merge_sites.get_connection')
+    def test_merge_duplicate_sites_boundary_safe_merges_one_group(
+        self,
+        mock_get_connection,
+        mock_load_csv,
+        mock_find_dupes,
+        mock_transfer,
+        mock_update_site_metadata,
+        mock_update_csv,
+    ):
+        """Test merge_duplicate_sites boundary_safe groups by group_id and deletes extras."""
+        mock_load_csv.return_value = (
+            pd.DataFrame({'SiteName': ['Site A']}),
+            pd.DataFrame({'Site Name': ['Site_Keep']}),
+            pd.DataFrame({'SiteName': []}),
+        )
+
+        df = pd.DataFrame({
+            'site_id': [1, 2],
+            'site_name': ['Site_Keep', 'Site_Delete'],
+            'rounded_lat': [35.124, 35.123],
+            'rounded_lon': [-97.5, -97.5],
+            'latitude': [35.123501, 35.123499],
+            'longitude': [-97.5, -97.5],
+            'county': [None, None],
+            'river_basin': [None, None],
+            'ecoregion': [None, None],
+            'group_id': [0, 0],
+        })
+        mock_find_dupes.return_value = df
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_get_connection.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+
+        # Preferred site existence check
+        mock_cursor.fetchone.return_value = ('Site_Keep',)
+
+        mock_transfer.return_value = {
+            'chemical_collection_events': 1,
+            'fish_collection_events': 0,
+            'macro_collection_events': 0,
+            'habitat_assessments': 0,
+        }
+        mock_update_site_metadata.return_value = True
+
+        result = merge_duplicate_sites(boundary_safe=True)
+
+        self.assertEqual(result['groups_processed'], 1)
+        self.assertEqual(result['sites_deleted'], 1)
+        self.assertEqual(result['records_transferred'], 1)
+        self.assertTrue(mock_transfer.called)
 
     # =============================================================================
     # SITE PROCESSING TESTS (from site_processing.py)
