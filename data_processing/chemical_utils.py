@@ -356,7 +356,7 @@ def get_existing_data(conn):
     
     return existing_measurements, site_lookup
 
-def insert_collection_event(cursor, site_id, date_str, year, month, site_name):
+def insert_collection_event(cursor, site_id, date_str, year, month, site_name, sample_id=None):
     """
     Inserts a new chemical collection event, allowing for duplicate site-date entries.
     
@@ -371,14 +371,43 @@ def insert_collection_event(cursor, site_id, date_str, year, month, site_name):
     Returns:
         The event_id of the newly created event.
     """
-    cursor.execute("""
-    INSERT INTO chemical_collection_events 
-    (site_id, collection_date, year, month)
-    VALUES (?, ?, ?, ?)
-    """, (site_id, date_str, year, month))
-    
-    event_id = cursor.lastrowid
-    return event_id
+    if sample_id is not None and not pd.isna(sample_id):
+        try:
+            sample_id_int = int(sample_id)
+        except Exception:
+            sample_id_int = None
+    else:
+        sample_id_int = None
+
+    if sample_id_int is not None:
+        cursor.execute(
+            "SELECT event_id FROM chemical_collection_events WHERE sample_id = ?",
+            (sample_id_int,),
+        )
+        existing = cursor.fetchone()
+        if existing and existing[0] is not None:
+            return existing[0]
+
+        cursor.execute(
+            """
+            INSERT INTO chemical_collection_events 
+            (site_id, sample_id, collection_date, year, month)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (site_id, sample_id_int, date_str, year, month),
+        )
+        return cursor.lastrowid
+
+    cursor.execute(
+        """
+        INSERT INTO chemical_collection_events 
+        (site_id, collection_date, year, month)
+        VALUES (?, ?, ?, ?)
+        """,
+        (site_id, date_str, year, month),
+    )
+
+    return cursor.lastrowid
 
 def insert_chemical_measurement(cursor, event_id, parameter_id, value, status, existing_measurements):
     """
@@ -456,9 +485,12 @@ def insert_chemical_data(df, allow_duplicates=True, data_source="unknown"):
                 date_str = row['Date'].strftime('%Y-%m-%d')
                 year = row['Year']
                 month = row['Month']
+                sample_id = None
+                if 'sample_id' in row and pd.notna(row['sample_id']):
+                    sample_id = row['sample_id']
                 
                 event_id = insert_collection_event(
-                    cursor, site_id, date_str, year, month, site_name
+                    cursor, site_id, date_str, year, month, site_name, sample_id=sample_id
                 )
                 stats['events_added'] += 1
                 
