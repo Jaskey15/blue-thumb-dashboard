@@ -4,10 +4,7 @@ This module contains reusable helper functions used across the dashboard.
 
 import os
 import traceback
-
-import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import dcc, html
 
 # Common style configurations
 CAPTION_STYLE = {
@@ -44,16 +41,25 @@ def setup_logging(module_name, category="general"):
             if parent_dir == current_dir:  # Reached system root
                 break
             current_dir = parent_dir
-        
+
         raise FileNotFoundError(
             f"Could not find project root (app.py) within {max_levels} parent directories. "
             f"Make sure app.py exists in your project root."
         )
-    
-    project_root = find_project_root()
+
+    if (
+        os.environ.get('K_SERVICE')
+        or os.environ.get('K_REVISION')
+        or os.environ.get('FUNCTION_TARGET')
+        or os.environ.get('GAE_APPLICATION')
+    ):
+        project_root = '/tmp'
+    else:
+        project_root = find_project_root()
+
     logs_dir = os.path.join(project_root, 'logs', category)
     os.makedirs(logs_dir, exist_ok=True)
-    
+
     log_file = os.path.join(logs_dir, f"{module_name}.log")
     
     # Module-specific logger configuration
@@ -124,6 +130,8 @@ def load_markdown_content(filename, fallback_message=None, link_target=None):
     logger = setup_logging("load_markdown_content", category="utils")
 
     try:
+        from dash import dcc, html
+
         base_dir = os.path.dirname(__file__) 
         file_path = os.path.join(base_dir, 'text', filename)  
 
@@ -151,11 +159,16 @@ def load_markdown_content(filename, fallback_message=None, link_target=None):
         error_msg = f"Error loading content from {filename}: {e}"
         logger.error(error_msg)
         logger.debug(traceback.format_exc())
-        
-        return html.Div(
-            fallback_message or f"Error loading content: {str(e)}",
-            className="alert alert-danger"
-        )
+
+        try:
+            from dash import html
+
+            return html.Div(
+                fallback_message or f"Error loading content: {str(e)}",
+                className="alert alert-danger"
+            )
+        except Exception:
+            return fallback_message or f"Error loading content: {str(e)}"
     
 def get_sites_with_data(data_type):
     """
@@ -224,7 +237,11 @@ def create_metrics_accordion(table_component, title, accordion_id):
     """
     Wrap metrics tables in collapsible accordion for better UX.
     """
+    logger = setup_logging("create_metrics_accordion", category="utils")
+
     try:
+        from dash import html
+        import dash_bootstrap_components as dbc
         accordion = html.Div([
             dbc.Accordion([
                 dbc.AccordionItem(
@@ -237,16 +254,26 @@ def create_metrics_accordion(table_component, title, accordion_id):
         return accordion
     except Exception as e:
         logger.error(f"Error creating accordion {accordion_id}: {e}")
-        return html.Div(
-            f"Could not create metrics table: {str(e)}",
-            className="alert alert-warning"
-        )
+
+        try:
+            from dash import html
+
+            return html.Div(
+                f"Could not create metrics table: {str(e)}",
+                className="alert alert-warning"
+            )
+        except Exception:
+            return f"Could not create metrics table: {str(e)}"
 
 def create_image_with_caption(src, caption, className="img-fluid", style=None, alt_text=None):
     """
     Create accessible image components with consistent styling.
     """
+    logger = setup_logging("create_image_with_caption", category="utils")
+
     try:
+        from dash import html
+
         if style is None:
             style = DEFAULT_IMAGE_STYLE.copy()
             
@@ -268,10 +295,16 @@ def create_image_with_caption(src, caption, className="img-fluid", style=None, a
     
     except Exception as e:
         logger.error(f"Error creating image with caption: {e}")
-        return html.Div(
-            f"Image could not be loaded: {str(e)}",
-            className="alert alert-warning"
-        )
+
+        try:
+            from dash import html
+
+            return html.Div(
+                f"Image could not be loaded: {str(e)}",
+                className="alert alert-warning"
+            )
+        except Exception:
+            return f"Image could not be loaded: {str(e)}"
 
 def safe_div(a, b, default=0):
     """
