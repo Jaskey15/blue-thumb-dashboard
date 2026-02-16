@@ -291,6 +291,7 @@ def format_to_database_schema(df):
     """
     try:
         formatted_df = df.copy()
+        has_sample_id = 'sample_id' in formatted_df.columns
         
         # Calculate final pH using the "worst-case" (furthest from 7) logic.
         formatted_df['pH'] = formatted_df.apply(get_ph_worst_case, axis=1)
@@ -311,6 +312,8 @@ def format_to_database_schema(df):
         required_columns = ['Site_Name', 'Date', 'Year', 'Month', 'do_percent', 'pH', 
                            'Nitrate', 'Nitrite', 'Ammonia', 'Phosphorus', 'Chloride', 
                            'soluble_nitrogen']
+        if has_sample_id:
+            required_columns.append('sample_id')
         
         formatted_df = formatted_df[required_columns]
         
