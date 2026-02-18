@@ -34,7 +34,7 @@ def load_csv_files():
     
     return site_data, updated_chemical, chemical_data
 
-def find_duplicate_coordinate_groups(conn=None, boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+def find_duplicate_coordinate_groups(conn=None, boundary_safe=True, distance_threshold_m=50.0, scale=1000):
     """Find candidate duplicate sites by location.
 
     This is the core "candidate grouping" step used by both analysis and merge workflows.
@@ -182,7 +182,7 @@ def find_duplicate_coordinate_groups(conn=None, boundary_safe=False, distance_th
         if should_close:
             close_connection(conn)
 
-def analyze_coordinate_duplicates(boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+def analyze_coordinate_duplicates(boundary_safe=True, distance_threshold_m=50.0, scale=1000):
     """Analyze duplicate groups without mutating the database.
 
     This is a read-only preview mode that:
@@ -482,7 +482,7 @@ def update_csv_files_with_mapping(site_mapping):
     else:
         logger.info("No CSV updates needed - site names already current")
 
-def merge_duplicate_sites(boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+def merge_duplicate_sites(boundary_safe=True, distance_threshold_m=50.0, scale=1000):
     """Merge duplicate sites by transferring monitoring data and deleting extras.
 
     This function mutates the SQLite database by:

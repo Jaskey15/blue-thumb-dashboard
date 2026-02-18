@@ -460,13 +460,15 @@ class TestSiteManagement(unittest.TestCase):
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = near_boundary_sites
 
-            result_default = find_duplicate_coordinate_groups()
-            self.assertTrue(result_default.empty)
+            # Rounding mode misses boundary duplicates
+            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
+            self.assertTrue(result_rounding.empty)
 
-            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=50.0)
-            self.assertEqual(len(result_boundary_safe), 2)
-            self.assertIn('group_id', result_boundary_safe.columns)
-            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+            # Default (boundary-safe) catches them
+            result_default = find_duplicate_coordinate_groups()
+            self.assertEqual(len(result_default), 2)
+            self.assertIn('group_id', result_default.columns)
+            self.assertEqual(len(result_default['group_id'].unique()), 1)
 
     @patch('data_processing.merge_sites.get_connection')
     def test_find_duplicate_coordinate_groups_boundary_safe_respects_threshold(self, mock_get_connection):
@@ -513,12 +515,14 @@ class TestSiteManagement(unittest.TestCase):
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = chain_sites
 
-            result_default = find_duplicate_coordinate_groups()
-            self.assertTrue(result_default.empty)
+            # Rounding mode misses chain duplicates
+            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
+            self.assertTrue(result_rounding.empty)
 
-            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=15.0)
-            self.assertEqual(len(result_boundary_safe), 3)
-            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+            # Default (boundary-safe) with custom threshold catches the chain
+            result_default = find_duplicate_coordinate_groups(distance_threshold_m=15.0)
+            self.assertEqual(len(result_default), 3)
+            self.assertEqual(len(result_default['group_id'].unique()), 1)
 
     @patch('data_processing.merge_sites.get_connection')
     def test_find_duplicate_coordinate_groups_boundary_safe_negative_longitude_bins(self, mock_get_connection):
@@ -540,12 +544,14 @@ class TestSiteManagement(unittest.TestCase):
 
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = negative_lon_sites
-            result_default = find_duplicate_coordinate_groups()
-            self.assertTrue(result_default.empty)
+            # Rounding mode misses negative-longitude boundary duplicates
+            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
+            self.assertTrue(result_rounding.empty)
 
-            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=50.0)
-            self.assertEqual(len(result_boundary_safe), 2)
-            self.assertEqual(len(result_boundary_safe['group_id'].unique()), 1)
+            # Default (boundary-safe) catches them
+            result_default = find_duplicate_coordinate_groups()
+            self.assertEqual(len(result_default), 2)
+            self.assertEqual(len(result_default['group_id'].unique()), 1)
 
     def test_determine_preferred_site_updated_chemical_priority(self):
         """Test site selection prioritizes updated_chemical_data sites."""
@@ -632,16 +638,19 @@ class TestSiteManagement(unittest.TestCase):
             pd.DataFrame({'SiteName': ['Red River Main']})
         )
         
-        # Mock finding duplicates
-        mock_find_dupes.return_value = self.sample_sites_with_duplicates[
+        # Mock finding duplicates — include group_id for default boundary-safe mode
+        dupes = self.sample_sites_with_duplicates[
             self.sample_sites_with_duplicates['site_id'].isin([1, 2])
-        ]
-        
+        ].copy()
+        dupes['group_id'] = 0
+        mock_find_dupes.return_value = dupes
+
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
-        
+
+        # Default (boundary-safe) should work with group_id data
         result = analyze_coordinate_duplicates()
-        
+
         # Should return analysis results
         self.assertIsNotNone(result)
         self.assertIn('total_duplicate_sites', result)

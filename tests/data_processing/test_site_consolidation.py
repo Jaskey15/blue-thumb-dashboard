@@ -514,16 +514,19 @@ class TestSiteManagement(unittest.TestCase):
             pd.DataFrame({'SiteName': ['Red River Main']})
         )
         
-        # Mock finding duplicates
-        mock_find_dupes.return_value = self.sample_sites_with_duplicates[
+        # Mock finding duplicates — include group_id for default boundary-safe mode
+        dupes = self.sample_sites_with_duplicates[
             self.sample_sites_with_duplicates['site_id'].isin([1, 2])
-        ]
-        
+        ].copy()
+        dupes['group_id'] = 0
+        mock_find_dupes.return_value = dupes
+
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
-        
+
+        # Default (boundary-safe) should work with group_id data
         result = analyze_coordinate_duplicates()
-        
+
         # Should return analysis results
         self.assertIsNotNone(result)
         self.assertIn('total_duplicate_sites', result)
