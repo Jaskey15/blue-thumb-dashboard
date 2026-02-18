@@ -32,27 +32,31 @@ python app.py                        # Starts on http://127.0.0.1:8050
 
 ### Docker
 
-`Dockerfile` builds on `python:3.9-slim`:
+`Dockerfile` builds on `python:3.12-slim`:
 - Installs dependencies from `requirements.txt`
 - Creates log directory structure
 - Runs via Gunicorn on port 8080 (1 worker, 8 threads)
 
-### Cloud Build CI/CD
+### Continuous Deployment (GitHub → Cloud Run)
 
-`cloudbuild.yaml` pipeline:
-1. **Build** → `gcr.io/$PROJECT_ID/blue-thumb-dashboard:$BUILD_ID`
-2. **Push** → Google Container Registry
-3. **Deploy** → Cloud Run (us-central1, allow-unauthenticated)
+Pushes to `main` on GitHub automatically build and deploy via Cloud Build:
 
-Build machine: E2_HIGHCPU_8.
+1. Cloud Build trigger detects push to `main`
+2. Builds Docker image from `Dockerfile`
+3. Deploys new revision to Cloud Run (us-central1, allow-unauthenticated)
+
+The trigger was configured through the Cloud Run console ("Set up continuous deployment" → Cloud Build → GitHub).
+
 
 ### Required Environment Variables (Cloud Run)
 
 ```
-GOOGLE_CLOUD_PROJECT=<project-id>
+GOOGLE_CLOUD_PROJECT=blue-thumb-dashboard
+GCS_BUCKET_DATABASE=blue-thumb-database
 GCS_ASSET_BUCKET=blue-thumb-assets
-GOOGLE_GENAI_API_KEY=<vertex-ai-key>
 ```
+
+Vertex AI (chatbot) authenticates via the Cloud Run service account — no API key needed.
 
 ## Cloud Function: Survey123 Sync
 

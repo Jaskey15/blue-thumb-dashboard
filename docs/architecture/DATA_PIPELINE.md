@@ -7,7 +7,7 @@ The ETL pipeline must run in this order — each stage depends on the previous:
 ```
 1. consolidate_sites.py    → Clean CSVs, create master_sites.csv
 2. site_processing.py      → Load sites into database
-3. merge_sites.py          → Deduplicate sites by coordinates
+3. merge_sites.py          → Deduplicate sites by coordinate proximity (Haversine clustering)
 4. chemical_processing.py  → Process original chemical data
 5. updated_chemical_processing.py → Process range-based chemical data
 6. fish_processing.py      → Process fish IBI scores (uses bt_fieldwork_validator)
@@ -24,7 +24,7 @@ The full pipeline is orchestrated by `database/reset_database.py`.
 | `data_loader.py` | CSV loading, site name cleaning, BDL string conversion, fuzzy site matching (85% threshold) |
 | `consolidate_sites.py` | Phase 1: clean raw CSVs → interim/. Phase 2: merge all sites with priority-based metadata resolution |
 | `site_processing.py` | Insert/update sites in DB, classify active vs historic (active = chemical reading within 1 year of most recent) |
-| `merge_sites.py` | Find coordinate duplicates (3 decimal places, ~111m), merge to preferred site, reassign all monitoring data |
+| `merge_sites.py` | Find coordinate duplicates via boundary-safe Haversine clustering (50m default threshold, floor-bin + neighbor-bin expansion, union-find transitive grouping). Merge to preferred site, reassign all monitoring data. Legacy rounding mode available via `boundary_safe=False` |
 | `chemical_processing.py` | Process `cleaned_chemical_data.csv` — standard single-value chemical measurements |
 | `updated_chemical_processing.py` | Process `cleaned_updated_chemical_data.csv` — newer multi-range format (Low/Mid/High) |
 | `chemical_utils.py` | Shared chemical constants, validation, BDL conversion, status determination, DB insertion |
@@ -44,6 +44,21 @@ There are two separate chemical data formats from different collection periods:
 - **`updated_chemical_processing.py`** — Newer format. Parameters measured across Low/Mid/High ranges with a selection column. Uses `cleaned_updated_chemical_data.csv`. Applies range selection logic (e.g., pick greater of two readings, pH furthest from neutral 7.0).
 
 Both pipelines share `chemical_utils.py` for validation, BDL handling, and database insertion.
+
+## Site Deduplication
+
+Sites with nearly identical coordinates are merged in step 3 of the pipeline (`merge_sites.py`). The default algorithm uses **boundary-safe Haversine clustering**:
+
+1. **Candidate generation**: Coordinates are binned using `floor(lat * 1000)` / `floor(lon * 1000)` (~0.001° bins). Each site is compared against sites in the same bin and the 8 neighboring bins (±1 in lat/lon).
+2. **Distance filtering**: Candidate pairs are filtered by Haversine distance (default threshold: 50m).
+3. **Transitive clustering**: Union-find groups connected pairs transitively — if A is near B and B is near C, all three form one cluster.
+4. **Preferred site selection**: Within each cluster, the preferred site is chosen by priority:
+   - Sites present in `updated_chemical_data` source file (highest priority)
+   - Sites present in `chemical_data` source file
+   - Longest site name (fallback)
+5. **Merge**: All monitoring data (chemical, fish, macro, habitat) is reassigned from duplicate sites to the preferred site, then duplicates are deleted. Cleaned interim CSVs are updated with the new site name mappings.
+
+A legacy rounding mode (`boundary_safe=False`) groups by identical `ROUND(latitude, 3)` / `ROUND(longitude, 3)` bins but can miss near-duplicates on rounding boundaries. See `docs/RFC_PIPELINE_HARDENING_VALIDATION.md` for the design rationale.
 
 ## Shared Conventions
 
@@ -68,6 +83,7 @@ Applied at load time across all data types:
 
 ### Duplicate/Replicate Handling
 Each data type handles duplicates differently:
+- **Sites**: Coordinate-proximity dedup via boundary-safe Haversine clustering (see Site Deduplication section below)
 - **Chemical**: All records preserved (no dedup) — see `docs/decisions/CHEMICAL_DUPLICATE_HANDLING.md`
 - **Fish**: BT field work records distinguish true replicates from data entry errors — see `docs/decisions/FISH_DATA_VALIDATION.md`
 - **Habitat**: Same-date duplicates averaged, grade recalculated — see `docs/decisions/HABITAT_DUPLICATE_HANDLING.md`

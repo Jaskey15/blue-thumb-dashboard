@@ -93,8 +93,9 @@ Consolidate sites from multiple raw CSV files into a single master sites list wi
 Identify and merge sites that represent the same physical location but have different names in the database.
 
 ### Duplicate Detection Logic
-- **Method**: Round coordinates to 3 decimal places (~111 meters precision)
-- **Grouping**: Sites with identical rounded coordinates are considered duplicates
+- **Method**: Boundary-safe Haversine clustering (default). Coordinates are floor-binned at 0.001° resolution, then each site is compared against its bin and 8 neighboring bins using Haversine distance (50m default threshold). Union-find provides transitive clustering.
+- **Grouping**: Sites within the distance threshold are clustered transitively — if A is near B and B is near C, all three form one group.
+- **Legacy mode**: `boundary_safe=False` falls back to strict `ROUND(latitude, 3)` / `ROUND(longitude, 3)` bin matching, which can miss near-duplicates on rounding boundaries.
 - **Analysis**: Preview mode shows what would be merged without making changes
 
 ### Site Selection Priority
@@ -242,7 +243,7 @@ classify_active_sites()
 
 ### Coordinate-Based Duplicate Detection
 - **Problem**: Same physical locations have different site names
-- **Solution**: 3-decimal place coordinate rounding with priority-based selection
+- **Solution**: Boundary-safe Haversine clustering (50m threshold) with priority-based site selection. Replaced the original 3-decimal rounding approach which could miss near-duplicates on rounding boundaries.
 - **Impact**: Eliminates duplicate monitoring locations while preserving all data
 
 ### Active Site Classification
