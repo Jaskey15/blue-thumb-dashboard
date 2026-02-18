@@ -11,7 +11,7 @@ REGION="us-central1"
 RUNTIME="python312"
 MEMORY="512MB"
 TIMEOUT="540s"
-MAX_INSTANCES="10"
+MAX_INSTANCES="1"
 
 # Environment variables (these should be set via Secret Manager in production)
 ENV_VARS="GCS_BUCKET_DATABASE=blue-thumb-database"
