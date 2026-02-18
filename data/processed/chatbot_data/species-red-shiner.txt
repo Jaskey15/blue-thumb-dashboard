@@ -1,4 +1,0 @@
-Species Type: Fish
-Name: Red Shiner
-
-Description: Red shiners are small, colorful minnows known for their adaptability and vibrant breeding colors.

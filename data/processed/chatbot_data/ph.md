@@ -1,6 +1,0 @@
-### Description
-pH is a measure of how acidic or alkaline water is, measured on a scale from 0-14, with 7 being neutral. The normal pH range for Oklahoma streams is between 6.5 and 9.0, creating a balanced environment where aquatic life can thrive. When pH values fall outside this range, they can stress or even kill fish and other organisms by affecting their metabolic processes and damaging their gills and skin. Additionally, pH affects the toxicity of many pollutants—lower pH increases the toxicity of metals, while higher pH increases the toxicity of ammonia, making pH an important indicator of overall water quality.
-
-### Interpretation
-Monitor for pH readings consistently below 6.5 or above 9.0, which indicate potential water quality problems. Sudden pH spikes often correlate with algal blooms caused by nutrient pollution, while persistently low pH may indicate acid-forming pollutants. Pay attention to seasonal patterns—natural pH fluctuations are normal, but dramatic changes during specific weather events or times of year can reveal pollution sources. Remember that pH changes represent exponential differences in acidity (pH 6 is 10 times more acidic than pH 7), so even small numerical changes can be significant.
-

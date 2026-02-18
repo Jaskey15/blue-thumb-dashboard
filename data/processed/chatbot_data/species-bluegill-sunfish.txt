@@ -1,4 +1,0 @@
-Species Type: Fish
-Name: Bluegill Sunfish
-
-Description: Bluegill Sunfish have a deep, compressed body with blue and orange coloration.

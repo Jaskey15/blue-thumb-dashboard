@@ -1,4 +1,0 @@
-Species Type: Macroinvertebrate
-Name: Mayfly
-
-Description: Mayflies are known for their distinctive multi-tailed nymphs and are excellent indicators of healthy streams

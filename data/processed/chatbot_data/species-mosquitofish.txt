@@ -1,4 +1,0 @@
-Species Type: Fish
-Name: Mosquitofish
-
-Description: Mosquitofish are small fish that help control mosquito populations by eating their larvae.

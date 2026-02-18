@@ -1,3 +1,0 @@
-### Interpretation
-
-Higher bioassessment scores indicate healthier macroinvertebrate communities with greater diversity and more pollution-sensitive species like mayflies, stoneflies, and caddisflies. Scores above 83% of reference conditions suggest non-impaired streams with balanced communities, while lower scores indicate increasing stress from pollution, habitat degradation, or other environmental factors. Since macroinvertebrates respond more quickly to environmental changes than fish, they provide an early warning system for stream health problems. Compare seasonal trends and look for patterns that might correlate with weather events, land use changes, or upstream activities affecting your watershed.

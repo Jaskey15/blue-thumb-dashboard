@@ -1,4 +1,0 @@
-Category: Chemical Diagram
-Topic: Do Percent
-
-Caption: The oxygen balance in aquatic environments: atmospheric diffusion and photosynthesis add oxygen to water, while plant, animal, and bacterial respiration deplete it.
