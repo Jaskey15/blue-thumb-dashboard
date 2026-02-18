@@ -13,6 +13,8 @@ The preferred site is determined using a priority system:
 
 import os
 
+import math
+
 import pandas as pd
 
 from data_processing import setup_logging
@@ -32,8 +34,46 @@ def load_csv_files():
     
     return site_data, updated_chemical, chemical_data
 
-def find_duplicate_coordinate_groups(conn=None):
-    """Finds groups of sites with identical coordinates, rounded to 3 decimal places."""
+def find_duplicate_coordinate_groups(conn=None, boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+    """Find candidate duplicate sites by location.
+
+    This is the core "candidate grouping" step used by both analysis and merge workflows.
+
+    Default behavior (`boundary_safe=False`):
+    - Treats sites as duplicates if they share the same `ROUND(latitude, 3)` and
+      `ROUND(longitude, 3)` bins (i.e., identical 3-decimal rounding as computed
+      by SQLite in the query).
+    - Returns the subset of rows that belong to bins containing more than one site.
+
+    Boundary-safe behavior (`boundary_safe=True`):
+    - Uses a two-stage approach:
+      1) Candidate generation by binning coordinates into fixed "floor bins":
+         `lat_bin = floor(latitude * scale)`, `lon_bin = floor(longitude * scale)`.
+         With the default `scale=1000`, bins correspond to 0.001 degrees.
+      2) For each site, compares against sites in the same bin and the 8 neighboring
+         bins (±1 bin in latitude and longitude) and computes Haversine distance.
+         Pairs with distance `<= distance_threshold_m` are unioned into clusters.
+    - Clustering is transitive (A close to B, B close to C => A/B/C become one group)
+      via union-find.
+    - Returns only clustered rows (clusters with size > 1) and includes a `group_id`
+      column identifying the cluster.
+
+    Args:
+        conn: Optional SQLite connection. If omitted, this function opens/closes
+            its own connection.
+        boundary_safe: If True, enable neighbor-bin expansion + Haversine distance
+            clustering to catch rounding-boundary misses.
+        distance_threshold_m: Distance threshold (meters) for boundary-safe clustering.
+        scale: Bin scaling factor for boundary-safe candidate generation. `1000`
+            corresponds to 0.001-degree bins.
+
+    Returns:
+        A pandas DataFrame of candidate duplicate sites.
+        - If `boundary_safe=False`: includes `rounded_lat`/`rounded_lon` and all
+          query columns; no `group_id` column.
+        - If `boundary_safe=True`: includes all query columns plus `group_id`.
+        Empty DataFrames are returned when no duplicates are detected.
+    """
     if conn is None:
         conn = get_connection()
         should_close = True
@@ -58,21 +98,111 @@ def find_duplicate_coordinate_groups(conn=None):
         """
         
         df = pd.read_sql_query(query, conn)
-        
-        # Group by rounded coordinates to identify sites at the same location.
-        duplicate_groups = df.groupby(['rounded_lat', 'rounded_lon']).filter(lambda x: len(x) > 1)
-        
-        return duplicate_groups
+
+        if not boundary_safe:
+            duplicate_groups = df.groupby(['rounded_lat', 'rounded_lon']).filter(lambda x: len(x) > 1)
+            return duplicate_groups
+
+        df = df.reset_index(drop=True)
+
+        bin_to_indices = {}
+        lat_bins = [0] * len(df)
+        lon_bins = [0] * len(df)
+        for i, row in df.iterrows():
+            lat_bin = math.floor(row['latitude'] * scale)
+            lon_bin = math.floor(row['longitude'] * scale)
+            lat_bins[i] = lat_bin
+            lon_bins[i] = lon_bin
+            bin_to_indices.setdefault((lat_bin, lon_bin), []).append(i)
+
+        parent = list(range(len(df)))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra = find(a)
+            rb = find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        def haversine_m(lat1, lon1, lat2, lon2):
+            R = 6371000.0
+            phi1, phi2 = math.radians(lat1), math.radians(lat2)
+            dphi = math.radians(lat2 - lat1)
+            dlambda = math.radians(lon2 - lon1)
+            a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+            return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        for i, row in df.iterrows():
+            base = (lat_bins[i], lon_bins[i])
+            for dlat in (-1, 0, 1):
+                for dlon in (-1, 0, 1):
+                    nbr = (base[0] + dlat, base[1] + dlon)
+                    for j in bin_to_indices.get(nbr, []):
+                        if j <= i:
+                            continue
+                        dist = haversine_m(
+                            row['latitude'],
+                            row['longitude'],
+                            df.at[j, 'latitude'],
+                            df.at[j, 'longitude'],
+                        )
+                        if dist <= distance_threshold_m:
+                            union(i, j)
+
+        root_to_members = {}
+        for i in range(len(df)):
+            root = find(i)
+            root_to_members.setdefault(root, []).append(i)
+
+        dupe_groups = [members for members in root_to_members.values() if len(members) > 1]
+        if not dupe_groups:
+            empty = df.iloc[0:0].copy()
+            empty['group_id'] = pd.Series(dtype='int64')
+            return empty
+
+        idx_to_group_id = {}
+        out_indices = []
+        group_id = 0
+        for members in dupe_groups:
+            for idx in members:
+                idx_to_group_id[idx] = group_id
+                out_indices.append(idx)
+            group_id += 1
+
+        result = df.loc[out_indices].copy()
+        result['group_id'] = [idx_to_group_id[i] for i in result.index]
+        result = result.sort_values(['group_id', 'site_name'])
+        return result
     finally:
         if should_close:
             close_connection(conn)
 
-def analyze_coordinate_duplicates():
-    """
-    Analyzes coordinate duplicates without making database changes.
-    
+def analyze_coordinate_duplicates(boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+    """Analyze duplicate groups without mutating the database.
+
+    This is a read-only preview mode that:
+    - Detects duplicate groups using `find_duplicate_coordinate_groups(...)`.
+    - Applies `determine_preferred_site(...)` to each group to predict which site
+      would be kept and why.
+
+    Args:
+        boundary_safe: If True, analyze distance-based clusters (see
+            `find_duplicate_coordinate_groups`). If False, analyze strict
+            3-decimal-rounded coordinate bins.
+        distance_threshold_m: Distance threshold (meters) for boundary-safe clustering.
+        scale: Bin scaling factor for boundary-safe candidate generation.
+
     Returns:
-        A dictionary with summary statistics for review.
+        A dictionary with summary statistics, including per-group site lists and
+        a predicted keep decision.
+        - In rounding mode, group identifiers are reported as `(rounded_lat, rounded_lon)`.
+        - In boundary-safe mode, group identifiers are reported as `(group_id=<n>)`.
+        Returns `None` on unexpected errors.
     """
     logger.info("Analyzing coordinate duplicates...")
     
@@ -83,7 +213,12 @@ def analyze_coordinate_duplicates():
         chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
         
         conn = get_connection()
-        duplicate_groups_df = find_duplicate_coordinate_groups(conn)
+        duplicate_groups_df = find_duplicate_coordinate_groups(
+            conn,
+            boundary_safe=boundary_safe,
+            distance_threshold_m=distance_threshold_m,
+            scale=scale,
+        )
         close_connection(conn)
         
         if duplicate_groups_df.empty:
@@ -97,9 +232,11 @@ def analyze_coordinate_duplicates():
         duplicate_groups_summary = []
         total_duplicate_sites = len(duplicate_groups_df)
         group_count = 0
+
+        groupby_cols = ['group_id'] if boundary_safe else ['rounded_lat', 'rounded_lon']
         
         # Process each group to determine which site would be kept.
-        for (rounded_lat, rounded_lon), group in duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']):
+        for group_key, group in duplicate_groups_df.groupby(groupby_cols):
             group_count += 1
             sites_in_group = list(group['site_name'])
             
@@ -107,9 +244,15 @@ def analyze_coordinate_duplicates():
             preferred_site, _, reason = determine_preferred_site(
                 group, updated_chemical_sites, chemical_data_sites
             )
+
+            if boundary_safe:
+                coordinates = f"(group_id={group_key})"
+            else:
+                rounded_lat, rounded_lon = group_key
+                coordinates = f"({rounded_lat}, {rounded_lon})"
             
             group_info = {
-                'coordinates': f"({rounded_lat}, {rounded_lon})",
+                'coordinates': coordinates,
                 'site_count': len(group),
                 'sites': sites_in_group,
                 'would_keep': preferred_site['site_name'],
@@ -339,8 +482,33 @@ def update_csv_files_with_mapping(site_mapping):
     else:
         logger.info("No CSV updates needed - site names already current")
 
-def merge_duplicate_sites():
-    """Executes the merge process for all sites with the same coordinates."""
+def merge_duplicate_sites(boundary_safe=False, distance_threshold_m=50.0, scale=1000):
+    """Merge duplicate sites by transferring monitoring data and deleting extras.
+
+    This function mutates the SQLite database by:
+    - Selecting a preferred site for each duplicate group via `determine_preferred_site(...)`.
+    - Reassigning all monitoring data from duplicate site(s) to the preferred site
+      via `transfer_site_data(...)`.
+    - Deleting the now-empty duplicate site rows from `sites`.
+    - (Optionally) updating cleaned interim CSVs to replace deleted site names.
+
+    Grouping behavior:
+    - `boundary_safe=False` (default): groups are formed strictly by identical
+      `ROUND(latitude, 3)` and `ROUND(longitude, 3)` bins.
+    - `boundary_safe=True`: groups are formed by distance-based clustering using
+      neighbor-bin expansion + Haversine threshold (see `find_duplicate_coordinate_groups`).
+      Clustering is transitive, so chain-connected sites can be merged into a single group.
+
+    Args:
+        boundary_safe: If True, merge distance-based clusters; otherwise merge
+            strict 3-decimal-rounded coordinate bins.
+        distance_threshold_m: Distance threshold (meters) for boundary-safe clustering.
+        scale: Bin scaling factor for boundary-safe candidate generation.
+
+    Returns:
+        A dictionary containing counts of processed groups, deleted sites, and
+        transferred records.
+    """
     logger.info("Starting coordinate-based site merge process...")
     
     try:
@@ -352,7 +520,14 @@ def merge_duplicate_sites():
         conn = get_connection()
         cursor = conn.cursor()
         
-        duplicate_groups_df = find_duplicate_coordinate_groups(conn)
+        duplicate_groups_df = find_duplicate_coordinate_groups(
+            conn,
+            boundary_safe=boundary_safe,
+            distance_threshold_m=distance_threshold_m,
+            scale=scale,
+        )
+
+        groupby_cols = ['group_id'] if boundary_safe else ['rounded_lat', 'rounded_lon']
         
         groups_processed = 0
         sites_deleted = 0
@@ -361,9 +536,9 @@ def merge_duplicate_sites():
         
         try:
             if not duplicate_groups_df.empty:
-                logger.info(f"Found {len(duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']))} coordinate groups with duplicates")
+                logger.info(f"Found {len(duplicate_groups_df.groupby(groupby_cols))} coordinate groups with duplicates")
                 
-                for (rounded_lat, rounded_lon), group in duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']):
+                for _, group in duplicate_groups_df.groupby(groupby_cols):
                     preferred_site, sites_to_merge, reason = determine_preferred_site(
                         group, updated_chemical_sites, chemical_data_sites
                     )
