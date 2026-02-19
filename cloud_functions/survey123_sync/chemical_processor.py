@@ -161,6 +161,10 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         site_aliases = {
             'cow creek: virginia avenue': 'Cow Creek: West Virginia Avenue',
             'cow creek: virginia ave': 'Cow Creek: West Virginia Avenue',
+            'blue beaver creek: cache rd': 'Blue Beaver Creek: Pecan Road',
+            'mooser creek: riverfield': 'Mooser Creek Trib: Riverfield School',
+            'deep fork river: canyon park': 'Deep Fork Tributary: Classen',
+            'tributary to arkansas river: walton': 'Unknown Trib to Arkansas River',
         }
         
         records_inserted = 0
