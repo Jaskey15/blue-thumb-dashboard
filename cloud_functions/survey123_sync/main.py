@@ -252,6 +252,30 @@ def _get_sync_mode(request) -> str:
     return (mode or 'survey123').strip().lower()
 
 
+def _get_feature_server_override(request):
+    since_date = None
+    since_datetime = None
+
+    try:
+        if hasattr(request, 'args') and request.args is not None:
+            since_date = request.args.get('since_date')
+            since_datetime = request.args.get('since_datetime')
+    except Exception:
+        since_date = since_date
+        since_datetime = since_datetime
+
+    try:
+        body = request.get_json(silent=True) if request is not None else None
+        if isinstance(body, dict):
+            since_date = since_date or body.get('since_date')
+            since_datetime = since_datetime or body.get('since_datetime')
+    except Exception:
+        since_date = since_date
+        since_datetime = since_datetime
+
+    return since_date, since_datetime
+
+
 def _get_db_latest_chemical_date(db_path: str) -> str:
     try:
         conn = sqlite3.connect(db_path)
@@ -267,7 +291,7 @@ def _get_db_latest_chemical_date(db_path: str) -> str:
         return '2020-01-01'
 
 
-def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime):
+def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime, request=None):
     logger.info("Running FeatureServer sync mode")
 
     feature_server_metadata_blob = 'sync_metadata/last_feature_server_sync.json'
@@ -285,19 +309,36 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                 insert_processed_data_to_db,
             )
 
-            feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
-            if feature_server_blob.exists():
-                last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
-                sync_strategy = 'editdate'
-                sync_marker = last_sync.isoformat()
-                logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
-                records = arcgis_sync.fetch_features_edited_since(last_sync)
+            since_date_override, since_datetime_override = _get_feature_server_override(request)
+            if since_date_override or since_datetime_override:
+                if since_datetime_override:
+                    try:
+                        last_sync = datetime.fromisoformat(str(since_datetime_override))
+                    except Exception:
+                        last_sync = since_datetime_override
+                    sync_strategy = 'editdate_override'
+                    sync_marker = str(since_datetime_override)
+                    logger.info(f"FeatureServer sync strategy=editdate_override since={sync_marker}")
+                    records = arcgis_sync.fetch_features_edited_since(last_sync)
+                else:
+                    sync_strategy = 'day_override'
+                    sync_marker = str(since_date_override)
+                    logger.info(f"FeatureServer sync strategy=day_override since_date={sync_marker}")
+                    records = arcgis_sync.fetch_features_since(sync_marker)
             else:
-                since_date = _get_db_latest_chemical_date(temp_db.name)
-                sync_strategy = 'day'
-                sync_marker = since_date
-                logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
-                records = arcgis_sync.fetch_features_since(since_date)
+                feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
+                if feature_server_blob.exists():
+                    last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
+                    sync_strategy = 'editdate'
+                    sync_marker = last_sync.isoformat()
+                    logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
+                    records = arcgis_sync.fetch_features_edited_since(last_sync)
+                else:
+                    since_date = _get_db_latest_chemical_date(temp_db.name)
+                    sync_strategy = 'day'
+                    sync_marker = since_date
+                    logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
+                    records = arcgis_sync.fetch_features_since(since_date)
 
             if not records:
                 logger.info("No new QAQC-complete FeatureServer records found")
@@ -452,7 +493,7 @@ def survey123_daily_sync(request):
         db_manager = DatabaseManager(DATABASE_BUCKET)
 
         if mode == 'feature_server':
-            return _run_feature_server_sync(db_manager, start_time)
+            return _run_feature_server_sync(db_manager, start_time, request)
 
         if not all([ARCGIS_CLIENT_ID, ARCGIS_CLIENT_SECRET, SURVEY123_FORM_ID]):
             error_msg = "Missing required environment variables"
