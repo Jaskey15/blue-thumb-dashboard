@@ -482,6 +482,10 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
             self.assertEqual(result['records_inserted'], 0)
             self.assertEqual(result['skipped_records_unknown_sites'], 1)
             self.assertEqual(result['unknown_sites'], ['Definitely Not A Real Site'])
+            self.assertEqual(result['unknown_site_counts'], {'Definitely Not A Real Site': 1})
+            self.assertEqual(result['unknown_site_sample_ids'], {'Definitely Not A Real Site': [9999]})
+            self.assertEqual(result['unknown_site_sample_ids_truncated'], False)
+            self.assertEqual(result['unknown_site_sample_ids_limit_per_site'], 50)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
