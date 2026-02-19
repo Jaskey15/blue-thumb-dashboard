@@ -4,6 +4,7 @@ Tests the logic in data_processing.chemical_processing module.
 """
 
 import os
+import sqlite3
 import sys
 import unittest
 from unittest.mock import patch
@@ -35,6 +36,8 @@ from data_processing.updated_chemical_processing import (
     process_simple_nutrients,
     process_updated_chemical_data,
 )
+from data_processing.arcgis_sync import translate_to_pipeline_schema
+from data_processing.chemical_utils import insert_collection_event
 from utils import setup_logging
 
 # Set up logging for tests
@@ -252,6 +255,137 @@ class TestChemicalProcessing(unittest.TestCase):
         
         # Check that intermediate column was removed
         self.assertNotIn('parsed_datetime', result_df.columns)
+
+    def test_translate_to_pipeline_schema_normalizes_site_and_sets_sample_id(self):
+        """ArcGIS translation should normalize whitespace and carry objectid as sample_id."""
+        record = {
+            'objectid': 123456,
+            'SiteName': 'Wolf Creek:  McMahon Soccer Park',
+            'day': 1737374400000,  # 2025-01-20 12:00:00 UTC
+            'oxygen_sat': 95.5,
+            'pH1': 7.2,
+            'pH2': 7.5,
+            'nitratetest1': 0.5,
+            'nitratetest2': 0.6,
+            'nitritetest1': 0.05,
+            'nitritetest2': 0.04,
+            'Ammonia_Range': 'Low',
+            'ammonia_Nitrogen2': 0.1,
+            'ammonia_Nitrogen3': 0.12,
+            'Ammonia_nitrogen_midrange1_Final': None,
+            'Ammonia_nitrogen_midrange2_Final': None,
+            'Ortho_Range': 'Low',
+            'Orthophosphate_Low1_Final': 0.02,
+            'Orthophosphate_Low2_Final': 0.03,
+            'Orthophosphate_Mid1_Final': None,
+            'Orthophosphate_Mid2_Final': None,
+            'Orthophosphate_High1_Final': None,
+            'Orthophosphate_High2_Final': None,
+            'Chloride_Range': 'Low',
+            'Chloride_Low1_Final': 25.0,
+            'Chloride_Low2_Final': 26.0,
+            'Chloride_High1_Final': None,
+            'Chloride_High2_Final': None,
+            'QAQC_Complete': 'X',
+        }
+
+        df = translate_to_pipeline_schema([record])
+        self.assertEqual(len(df), 1)
+        self.assertIn('sample_id', df.columns)
+        self.assertEqual(df.loc[0, 'sample_id'], 123456)
+        self.assertEqual(df.loc[0, 'Site Name'], 'Wolf Creek: McMahon Soccer Park')
+        self.assertIn('Sampling Date', df.columns)
+
+        parsed = parse_sampling_dates(df.copy())
+        self.assertIn('Date', parsed.columns)
+        self.assertIn('Year', parsed.columns)
+        self.assertIn('Month', parsed.columns)
+        self.assertIn('sample_id', parsed.columns)
+
+    def test_format_to_database_schema_preserves_sample_id(self):
+        """When sample_id is present, it should be retained in formatted output."""
+        test_df = pd.DataFrame({
+            'Site Name': ['Test Site'],
+            'Date': [pd.Timestamp('2025-01-20')],
+            'Year': [2025],
+            'Month': [1],
+            '% Oxygen Saturation': [95.5],
+            'pH #1': [7.2],
+            'pH #2': [7.5],
+            'Nitrate': [0.6],
+            'Nitrite': [0.05],
+            'Ammonia': [0.12],
+            'Orthophosphate': [0.03],
+            'Chloride': [26.0],
+            'soluble_nitrogen': [0.77],
+            'sample_id': [123456],
+        })
+
+        formatted = format_to_database_schema(test_df)
+        self.assertFalse(formatted.empty)
+        self.assertIn('sample_id', formatted.columns)
+        self.assertEqual(formatted.loc[0, 'sample_id'], 123456)
+
+    def test_insert_collection_event_idempotent_with_sample_id(self):
+        """insert_collection_event should reuse an event when sample_id matches."""
+        conn = sqlite3.connect(':memory:')
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE chemical_collection_events (
+                event_id INTEGER PRIMARY KEY,
+                site_id INTEGER NOT NULL,
+                sample_id INTEGER,
+                collection_date TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL
+            );
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX idx_chemical_collection_events_sample_id
+            ON chemical_collection_events(sample_id)
+            WHERE sample_id IS NOT NULL
+            """
+        )
+
+        event_id_1 = insert_collection_event(
+            cursor,
+            site_id=1,
+            date_str='2025-01-20',
+            year=2025,
+            month=1,
+            site_name='Test Site',
+            sample_id=999,
+        )
+        event_id_2 = insert_collection_event(
+            cursor,
+            site_id=1,
+            date_str='2025-01-20',
+            year=2025,
+            month=1,
+            site_name='Test Site',
+            sample_id=999,
+        )
+
+        self.assertEqual(event_id_1, event_id_2)
+        cursor.execute("SELECT COUNT(*) FROM chemical_collection_events")
+        self.assertEqual(cursor.fetchone()[0], 1)
+
+        event_id_3 = insert_collection_event(
+            cursor,
+            site_id=1,
+            date_str='2025-01-20',
+            year=2025,
+            month=1,
+            site_name='Test Site',
+            sample_id=1000,
+        )
+        self.assertNotEqual(event_id_1, event_id_3)
+        cursor.execute("SELECT COUNT(*) FROM chemical_collection_events")
+        self.assertEqual(cursor.fetchone()[0], 2)
 
     def test_get_ph_worst_case(self):
         """Test logic for selecting pH value furthest from neutral."""

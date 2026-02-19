@@ -126,6 +126,14 @@ def create_tables():
         FOREIGN KEY (site_id) REFERENCES sites (site_id)
     )
     ''')
+
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_chemical_collection_events_sample_id
+        ON chemical_collection_events(sample_id)
+        WHERE sample_id IS NOT NULL
+        """
+    )
     
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS chemical_measurements (

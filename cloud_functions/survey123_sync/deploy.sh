@@ -14,7 +14,8 @@ TIMEOUT="540s"
 MAX_INSTANCES="1"
 
 # Environment variables (these should be set via Secret Manager in production)
-ENV_VARS="GCS_BUCKET_DATABASE=blue-thumb-database"
+DATABASE_BUCKET="${GCS_BUCKET_DATABASE:-blue-thumb-database}"
+ENV_VARS="GCS_BUCKET_DATABASE=${DATABASE_BUCKET}"
 
 echo "Deploying Survey123 Daily Sync Cloud Function..."
 echo "Function: $FUNCTION_NAME"
@@ -24,12 +25,34 @@ echo "Runtime: $RUNTIME"
 # Change to the function's directory to correctly set the source
 cd "$(dirname "$0")"
 
+SCRIPT_DIR="$(pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+STAGE_DIR="$(mktemp -d)"
+
+cleanup() {
+    rm -rf "$STAGE_DIR"
+}
+trap cleanup EXIT
+
+cp "$SCRIPT_DIR/main.py" "$STAGE_DIR/main.py"
+cp "$SCRIPT_DIR/chemical_processor.py" "$STAGE_DIR/chemical_processor.py"
+cp "$SCRIPT_DIR/requirements.txt" "$STAGE_DIR/requirements.txt"
+
+cp "$REPO_ROOT/utils.py" "$STAGE_DIR/utils.py"
+
+cp -R "$REPO_ROOT/config" "$STAGE_DIR/config"
+cp -R "$REPO_ROOT/data_processing" "$STAGE_DIR/data_processing"
+cp -R "$REPO_ROOT/database" "$STAGE_DIR/database"
+
+rm -f "$STAGE_DIR/database/blue_thumb.db"
+
 # Deploy the function
 gcloud functions deploy $FUNCTION_NAME \
     --gen2 \
     --runtime=$RUNTIME \
     --region=$REGION \
-    --source=. \
+    --source="$STAGE_DIR" \
     --entry-point=survey123_daily_sync \
     --trigger-http \
     --memory=$MEMORY \

@@ -12,12 +12,20 @@ from typing import Any, Dict
 
 import pandas as pd
 
-# Import from main processing pipeline
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_candidate_root = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+)
+if (
+    os.path.isdir(os.path.join(_candidate_root, 'data_processing'))
+    and os.path.isdir(os.path.join(_candidate_root, 'database'))
+    and _candidate_root not in sys.path
+):
+    sys.path.insert(0, _candidate_root)
 
 from data_processing.chemical_utils import (
     apply_bdl_conversions,
     determine_status,
+    insert_collection_event,
     remove_empty_chemical_rows,
     validate_chemical_data,
 )
@@ -121,6 +129,14 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chemical_collection_events_sample_id
+            ON chemical_collection_events(sample_id)
+            WHERE sample_id IS NOT NULL
+            """
+        )
         
         reference_values = get_reference_values_from_db(conn)
         
@@ -130,6 +146,7 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         site_lookup = dict(zip(site_df['site_name'], site_df['site_id']))
         
         records_inserted = 0
+        has_sample_id = 'sample_id' in df.columns
         
         for _, row in df.iterrows():
             site_name = row['Site_Name']
@@ -140,25 +157,31 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
             
             site_id = site_lookup[site_name]
             date_str = row['Date'].strftime('%Y-%m-%d')
-            
-            # Collection event creation
-            event_query = """
-                INSERT OR IGNORE INTO chemical_collection_events (site_id, collection_date, year, month)
-                VALUES (?, ?, ?, ?)
-            """
-            cursor.execute(event_query, (site_id, date_str, row['Year'], row['Month']))
-            
-            # Event ID retrieval
-            event_id_query = """
-                SELECT event_id FROM chemical_collection_events 
-                WHERE site_id = ? AND collection_date = ?
-            """
-            cursor.execute(event_id_query, (site_id, date_str))
-            result = cursor.fetchone()
-            if not result:
-                logger.error(f"Failed to get event_id for site {site_name} on {date_str}")
-                continue
-            event_id = result[0]
+
+            sample_id = None
+            if has_sample_id:
+                sample_id = row.get('sample_id')
+
+            if sample_id is not None and pd.notna(sample_id):
+                event_id = insert_collection_event(
+                    cursor,
+                    site_id=site_id,
+                    date_str=date_str,
+                    year=row['Year'],
+                    month=row['Month'],
+                    site_name=site_name,
+                    sample_id=sample_id,
+                )
+            else:
+                event_id = insert_collection_event(
+                    cursor,
+                    site_id=site_id,
+                    date_str=date_str,
+                    year=row['Year'],
+                    month=row['Month'],
+                    site_name=site_name,
+                    sample_id=None,
+                )
             
             # Parameter measurements insertion
             parameter_map = {
