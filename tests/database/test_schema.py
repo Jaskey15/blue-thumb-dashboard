@@ -170,6 +170,19 @@ class TestChemicalSchema:
         """)
         params_with_refs = cursor.fetchall()
         assert len(params_with_refs) == 5, "All parameters should have reference values"
+
+    def test_chemical_collection_events_sample_id_unique_index(self, temp_db):
+        cursor = temp_db.cursor()
+
+        cursor.execute("PRAGMA index_list(chemical_collection_events)")
+        indexes = cursor.fetchall()
+        names = {row[1] for row in indexes}
+        assert 'idx_chemical_collection_events_sample_id' in names
+
+        cursor.execute("PRAGMA index_info(idx_chemical_collection_events_sample_id)")
+        cols = cursor.fetchall()
+        col_names = [row[2] for row in cols]
+        assert col_names == ['sample_id']
     
     def test_chemical_measurements_relationships(self, temp_db):
         """Test chemical measurements relationships."""
