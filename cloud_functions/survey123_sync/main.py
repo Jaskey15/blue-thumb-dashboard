@@ -170,22 +170,45 @@ class DatabaseManager:
     
     def upload_database(self, local_path: str) -> bool:
         """Upload updated database with automatic backup creation."""
+        bucket_name = getattr(self.bucket, 'name', None) or '<unknown-bucket>'
+        db_object_name = self.db_blob_name
+
         try:
-            # Create timestamped backup before updating
-            backup_name = f"backups/blue_thumb_backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}.db"
-            blob = self.bucket.blob(self.db_blob_name)
+            backup_name = (
+                f"backups/blue_thumb_backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}.db"
+            )
+            blob = self.bucket.blob(db_object_name)
+
             if blob.exists():
-                backup_blob = self.bucket.blob(backup_name)
-                backup_blob.upload_from_string(blob.download_as_string())
-                logger.info(f"Created backup: {backup_name}")
-            
-            new_blob = self.bucket.blob(self.db_blob_name)
-            new_blob.upload_from_filename(local_path)
-            logger.info(f"Uploaded updated database to {self.db_blob_name}")
-            return True
-            
+                try:
+                    backup_blob = self.bucket.blob(backup_name)
+                    backup_blob.upload_from_string(blob.download_as_string())
+                    logger.info(f"Created backup: gs://{bucket_name}/{backup_name}")
+                except Exception as e:
+                    logger.error(
+                        f"Error creating backup: gs://{bucket_name}/{backup_name} from gs://{bucket_name}/{db_object_name}: {e}"
+                    )
+                    raise
+            else:
+                logger.info(
+                    f"No existing database object found at gs://{bucket_name}/{db_object_name}; skipping backup"
+                )
+
+            try:
+                new_blob = self.bucket.blob(db_object_name)
+                new_blob.upload_from_filename(local_path)
+                logger.info(f"Uploaded updated database to gs://{bucket_name}/{db_object_name}")
+                return True
+            except Exception as e:
+                logger.error(
+                    f"Error uploading updated database to gs://{bucket_name}/{db_object_name} from {local_path}: {e}"
+                )
+                raise
+
         except Exception as e:
-            logger.error(f"Error uploading database: {e}")
+            logger.error(
+                f"Error uploading database (bucket={bucket_name} object={db_object_name}): {e}"
+            )
             return False
     
     def get_last_sync_timestamp(self, metadata_blob_name: str = 'sync_metadata/last_sync.json') -> datetime:
