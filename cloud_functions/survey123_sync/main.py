@@ -398,6 +398,9 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             if 'error' in insert_result:
                 raise Exception(f"Database insertion failed: {insert_result['error']}")
 
+            skipped_unknown_site_records = insert_result.get('skipped_records_unknown_sites', 0)
+            unknown_sites = insert_result.get('unknown_sites')
+
             classification_result = classify_active_sites_in_db(temp_db.name)
             if 'error' in classification_result:
                 logger.warning(f"Site classification failed: {classification_result['error']}")
@@ -428,6 +431,8 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_fetched': len(records),
             'records_processed': len(processed_data),
             'records_inserted': insert_result.get('records_inserted', 0),
+            'skipped_records_unknown_sites': skipped_unknown_site_records,
+            'unknown_sites': unknown_sites or [],
         },
     )
 
@@ -438,6 +443,8 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'records_fetched': len(records),
         'records_processed': len(processed_data),
         'records_inserted': insert_result.get('records_inserted', 0),
+        'skipped_records_unknown_sites': skipped_unknown_site_records,
+        'unknown_sites': unknown_sites or [],
         'execution_time': str(datetime.now() - start_time),
         'sync_strategy': sync_strategy,
         'sync_marker': sync_marker,
