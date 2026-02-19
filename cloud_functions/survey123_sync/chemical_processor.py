@@ -129,6 +129,14 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chemical_collection_events_sample_id
+            ON chemical_collection_events(sample_id)
+            WHERE sample_id IS NOT NULL
+            """
+        )
         
         reference_values = get_reference_values_from_db(conn)
         
@@ -165,24 +173,15 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                     sample_id=sample_id,
                 )
             else:
-                # Collection event creation
-                event_query = """
-                    INSERT OR IGNORE INTO chemical_collection_events (site_id, collection_date, year, month)
-                    VALUES (?, ?, ?, ?)
-                """
-                cursor.execute(event_query, (site_id, date_str, row['Year'], row['Month']))
-                
-                # Event ID retrieval
-                event_id_query = """
-                    SELECT event_id FROM chemical_collection_events 
-                    WHERE site_id = ? AND collection_date = ?
-                """
-                cursor.execute(event_id_query, (site_id, date_str))
-                result = cursor.fetchone()
-                if not result:
-                    logger.error(f"Failed to get event_id for site {site_name} on {date_str}")
-                    continue
-                event_id = result[0]
+                event_id = insert_collection_event(
+                    cursor,
+                    site_id=site_id,
+                    date_str=date_str,
+                    year=row['Year'],
+                    month=row['Month'],
+                    site_name=site_name,
+                    sample_id=None,
+                )
             
             # Parameter measurements insertion
             parameter_map = {
