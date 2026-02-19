@@ -272,99 +272,110 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
 
     feature_server_metadata_blob = 'sync_metadata/last_feature_server_sync.json'
 
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
-        if not db_manager.download_database(temp_db.name):
-            raise Exception("Failed to download database")
+    temp_db_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
+            temp_db_path = temp_db.name
+            if not db_manager.download_database(temp_db.name):
+                raise Exception("Failed to download database")
 
-        from data_processing import arcgis_sync
-        from chemical_processor import (
-            classify_active_sites_in_db,
-            insert_processed_data_to_db,
-        )
-
-        feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
-        if feature_server_blob.exists():
-            last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
-            sync_strategy = 'editdate'
-            sync_marker = last_sync.isoformat()
-            logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
-            records = arcgis_sync.fetch_features_edited_since(last_sync)
-        else:
-            since_date = _get_db_latest_chemical_date(temp_db.name)
-            sync_strategy = 'day'
-            sync_marker = since_date
-            logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
-            records = arcgis_sync.fetch_features_since(since_date)
-
-        if not records:
-            logger.info("No new QAQC-complete FeatureServer records found")
-            db_manager.update_sync_timestamp(
-                start_time,
-                metadata_blob_name=feature_server_metadata_blob,
-                metadata_extra={
-                    'mode': 'feature_server',
-                    'sync_strategy': sync_strategy,
-                    'sync_marker': sync_marker,
-                    'records_fetched': 0,
-                },
+            from data_processing import arcgis_sync
+            from chemical_processor import (
+                classify_active_sites_in_db,
+                insert_processed_data_to_db,
             )
-            return {
-                'status': 'success',
-                'mode': 'feature_server',
-                'message': 'No new data to process',
-                'records_fetched': 0,
-                'records_processed': 0,
-                'execution_time': str(datetime.now() - start_time),
-                'sync_strategy': sync_strategy,
-                'sync_marker': sync_marker,
-                'current_sync': start_time.isoformat(),
-            }
 
-        df = arcgis_sync.translate_to_pipeline_schema(records)
-        processed_data = arcgis_sync.process_fetched_data(df)
+            feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
+            if feature_server_blob.exists():
+                last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
+                sync_strategy = 'editdate'
+                sync_marker = last_sync.isoformat()
+                logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
+                records = arcgis_sync.fetch_features_edited_since(last_sync)
+            else:
+                since_date = _get_db_latest_chemical_date(temp_db.name)
+                sync_strategy = 'day'
+                sync_marker = since_date
+                logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
+                records = arcgis_sync.fetch_features_since(since_date)
 
-        if processed_data.empty:
-            logger.info("No FeatureServer records produced valid processed data")
-            db_manager.update_sync_timestamp(
-                start_time,
-                metadata_blob_name=feature_server_metadata_blob,
-                metadata_extra={
+            if not records:
+                logger.info("No new QAQC-complete FeatureServer records found")
+                db_manager.update_sync_timestamp(
+                    start_time,
+                    metadata_blob_name=feature_server_metadata_blob,
+                    metadata_extra={
+                        'mode': 'feature_server',
+                        'sync_strategy': sync_strategy,
+                        'sync_marker': sync_marker,
+                        'records_fetched': 0,
+                    },
+                )
+                return {
+                    'status': 'success',
                     'mode': 'feature_server',
+                    'message': 'No new data to process',
+                    'records_fetched': 0,
+                    'records_processed': 0,
+                    'execution_time': str(datetime.now() - start_time),
                     'sync_strategy': sync_strategy,
                     'sync_marker': sync_marker,
+                    'current_sync': start_time.isoformat(),
+                }
+
+            df = arcgis_sync.translate_to_pipeline_schema(records)
+            processed_data = arcgis_sync.process_fetched_data(df)
+
+            if processed_data.empty:
+                logger.info("No FeatureServer records produced valid processed data")
+                db_manager.update_sync_timestamp(
+                    start_time,
+                    metadata_blob_name=feature_server_metadata_blob,
+                    metadata_extra={
+                        'mode': 'feature_server',
+                        'sync_strategy': sync_strategy,
+                        'sync_marker': sync_marker,
+                        'records_fetched': len(records),
+                        'records_processed': 0,
+                        'records_inserted': 0,
+                    },
+                )
+                return {
+                    'status': 'success',
+                    'mode': 'feature_server',
+                    'message': 'No valid data to insert after processing',
                     'records_fetched': len(records),
                     'records_processed': 0,
                     'records_inserted': 0,
-                },
-            )
-            return {
-                'status': 'success',
-                'mode': 'feature_server',
-                'message': 'No valid data to insert after processing',
-                'records_fetched': len(records),
-                'records_processed': 0,
-                'records_inserted': 0,
-                'execution_time': str(datetime.now() - start_time),
-                'sync_strategy': sync_strategy,
-                'sync_marker': sync_marker,
-                'current_sync': start_time.isoformat(),
-            }
+                    'execution_time': str(datetime.now() - start_time),
+                    'sync_strategy': sync_strategy,
+                    'sync_marker': sync_marker,
+                    'current_sync': start_time.isoformat(),
+                }
 
-        insert_result = insert_processed_data_to_db(processed_data, temp_db.name)
-        if 'error' in insert_result:
-            raise Exception(f"Database insertion failed: {insert_result['error']}")
+            insert_result = insert_processed_data_to_db(processed_data, temp_db.name)
+            if 'error' in insert_result:
+                raise Exception(f"Database insertion failed: {insert_result['error']}")
 
-        classification_result = classify_active_sites_in_db(temp_db.name)
-        if 'error' in classification_result:
-            logger.warning(f"Site classification failed: {classification_result['error']}")
-        else:
-            logger.info(
-                f"Site classification updated: {classification_result['active_count']} active, "
-                f"{classification_result['historic_count']} historic"
-            )
+            classification_result = classify_active_sites_in_db(temp_db.name)
+            if 'error' in classification_result:
+                logger.warning(f"Site classification failed: {classification_result['error']}")
+            else:
+                logger.info(
+                    f"Site classification updated: {classification_result['active_count']} active, "
+                    f"{classification_result['historic_count']} historic"
+                )
 
-        if not db_manager.upload_database(temp_db.name):
-            raise Exception("Failed to upload updated database")
+            if not db_manager.upload_database(temp_db.name):
+                raise Exception("Failed to upload updated database")
+    finally:
+        if temp_db_path:
+            try:
+                os.unlink(temp_db_path)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
     db_manager.update_sync_timestamp(
         start_time,
@@ -473,28 +484,39 @@ def survey123_daily_sync(request):
         processed_data = process_survey123_data(new_data)
         
         # Database update with temporary file handling
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
-            if not db_manager.download_database(temp_db.name):
-                raise Exception("Failed to download database")
-            
-            from chemical_processor import (
-                classify_active_sites_in_db,
-                insert_processed_data_to_db,
-            )
-            insert_result = insert_processed_data_to_db(processed_data, temp_db.name)
-            
-            if 'error' in insert_result:
-                raise Exception(f"Database insertion failed: {insert_result['error']}")
-            
-            # Reclassify active/historic sites after inserting new data
-            classification_result = classify_active_sites_in_db(temp_db.name)
-            if 'error' in classification_result:
-                logger.warning(f"Site classification failed: {classification_result['error']}")
-            else:
-                logger.info(f"Site classification updated: {classification_result['active_count']} active, {classification_result['historic_count']} historic")
-            
-            if not db_manager.upload_database(temp_db.name):
-                raise Exception("Failed to upload updated database")
+        temp_db_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
+                temp_db_path = temp_db.name
+                if not db_manager.download_database(temp_db.name):
+                    raise Exception("Failed to download database")
+                
+                from chemical_processor import (
+                    classify_active_sites_in_db,
+                    insert_processed_data_to_db,
+                )
+                insert_result = insert_processed_data_to_db(processed_data, temp_db.name)
+                
+                if 'error' in insert_result:
+                    raise Exception(f"Database insertion failed: {insert_result['error']}")
+                
+                # Reclassify active/historic sites after inserting new data
+                classification_result = classify_active_sites_in_db(temp_db.name)
+                if 'error' in classification_result:
+                    logger.warning(f"Site classification failed: {classification_result['error']}")
+                else:
+                    logger.info(f"Site classification updated: {classification_result['active_count']} active, {classification_result['historic_count']} historic")
+                
+                if not db_manager.upload_database(temp_db.name):
+                    raise Exception("Failed to upload updated database")
+        finally:
+            if temp_db_path:
+                try:
+                    os.unlink(temp_db_path)
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
         
         db_manager.update_sync_timestamp(start_time)
         
