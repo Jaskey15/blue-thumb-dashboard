@@ -228,6 +228,190 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
+    def test_site_alias_blue_beaver_cache_rd(self):
+        db_path = self._create_minimal_db()
+        try:
+            canonical = 'Blue Beaver Creek: Pecan Road'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+                (canonical, 34.5361666, -98.5655277),
+            )
+            site_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+
+            df = pd.DataFrame(
+                [
+                    {
+                        'Site_Name': 'Blue Beaver Creek: Cache Rd',
+                        'Date': pd.Timestamp('2026-02-18'),
+                        'Year': 2026,
+                        'Month': 2,
+                        'pH': 7.1,
+                        'sample_id': 2001,
+                    }
+                ]
+            )
+
+            with patch('chemical_processor.get_reference_values_from_db', return_value={}), patch(
+                'chemical_processor.determine_status', return_value='Normal'
+            ):
+                result = chemical_processor.insert_processed_data_to_db(df, db_path)
+
+            self.assertEqual(result['records_inserted'], 1)
+            self.assertEqual(result['skipped_records_unknown_sites'], 0)
+            self.assertEqual(result['unknown_sites'], [])
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT site_id FROM chemical_collection_events")
+            rows = cur.fetchall()
+            conn.close()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], site_id)
+        finally:
+            os.unlink(db_path)
+
+    def test_site_alias_mooser_riverfield(self):
+        db_path = self._create_minimal_db()
+        try:
+            canonical = 'Mooser Creek Trib: Riverfield School'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+                (canonical, 36.0792, -96.0184),
+            )
+            site_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+
+            df = pd.DataFrame(
+                [
+                    {
+                        'Site_Name': 'Mooser Creek: Riverfield',
+                        'Date': pd.Timestamp('2026-02-18'),
+                        'Year': 2026,
+                        'Month': 2,
+                        'pH': 7.1,
+                        'sample_id': 2002,
+                    }
+                ]
+            )
+
+            with patch('chemical_processor.get_reference_values_from_db', return_value={}), patch(
+                'chemical_processor.determine_status', return_value='Normal'
+            ):
+                result = chemical_processor.insert_processed_data_to_db(df, db_path)
+
+            self.assertEqual(result['records_inserted'], 1)
+            self.assertEqual(result['skipped_records_unknown_sites'], 0)
+            self.assertEqual(result['unknown_sites'], [])
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT site_id FROM chemical_collection_events")
+            rows = cur.fetchall()
+            conn.close()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], site_id)
+        finally:
+            os.unlink(db_path)
+
+    def test_site_alias_deep_fork_canyon_park(self):
+        db_path = self._create_minimal_db()
+        try:
+            canonical = 'Deep Fork Tributary: Classen'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+                (canonical, 35.53349, -97.528907),
+            )
+            site_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+
+            df = pd.DataFrame(
+                [
+                    {
+                        'Site_Name': 'Deep Fork River: Canyon Park',
+                        'Date': pd.Timestamp('2026-02-18'),
+                        'Year': 2026,
+                        'Month': 2,
+                        'pH': 7.1,
+                        'sample_id': 2003,
+                    }
+                ]
+            )
+
+            with patch('chemical_processor.get_reference_values_from_db', return_value={}), patch(
+                'chemical_processor.determine_status', return_value='Normal'
+            ):
+                result = chemical_processor.insert_processed_data_to_db(df, db_path)
+
+            self.assertEqual(result['records_inserted'], 1)
+            self.assertEqual(result['skipped_records_unknown_sites'], 0)
+            self.assertEqual(result['unknown_sites'], [])
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT site_id FROM chemical_collection_events")
+            rows = cur.fetchall()
+            conn.close()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], site_id)
+        finally:
+            os.unlink(db_path)
+
+    def test_site_alias_arkansas_trib_walton(self):
+        db_path = self._create_minimal_db()
+        try:
+            canonical = 'Unknown Trib to Arkansas River'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+                (canonical, 35.75839, -95.30722),
+            )
+            site_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+
+            df = pd.DataFrame(
+                [
+                    {
+                        'Site_Name': 'Tributary to Arkansas River: Walton',
+                        'Date': pd.Timestamp('2026-02-18'),
+                        'Year': 2026,
+                        'Month': 2,
+                        'pH': 7.1,
+                        'sample_id': 2004,
+                    }
+                ]
+            )
+
+            with patch('chemical_processor.get_reference_values_from_db', return_value={}), patch(
+                'chemical_processor.determine_status', return_value='Normal'
+            ):
+                result = chemical_processor.insert_processed_data_to_db(df, db_path)
+
+            self.assertEqual(result['records_inserted'], 1)
+            self.assertEqual(result['skipped_records_unknown_sites'], 0)
+            self.assertEqual(result['unknown_sites'], [])
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT site_id FROM chemical_collection_events")
+            rows = cur.fetchall()
+            conn.close()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], site_id)
+        finally:
+            os.unlink(db_path)
+
     def test_site_normalization_matches_trailing_period(self):
         db_path = self._create_minimal_db()
         try:
