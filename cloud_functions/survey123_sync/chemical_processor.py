@@ -170,6 +170,10 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         records_inserted = 0
         skipped_records_unknown_sites = 0
         unknown_sites = set()
+        unknown_site_counts: Dict[str, int] = {}
+        unknown_site_sample_ids: Dict[str, Any] = {}
+        unknown_site_sample_ids_truncated = False
+        unknown_site_sample_ids_limit_per_site = 50
         has_sample_id = 'sample_id' in df.columns
         
         for _, row in df.iterrows():
@@ -193,8 +197,29 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                         site_name = canonical_name
 
             if site_id is None:
-                unknown_sites.add(str(site_name).strip())
+                site_name_str = str(site_name).strip()
+                unknown_sites.add(site_name_str)
                 skipped_records_unknown_sites += 1
+                unknown_site_counts[site_name_str] = unknown_site_counts.get(site_name_str, 0) + 1
+
+                if has_sample_id:
+                    raw_sample_id = row.get('sample_id')
+                    sample_id_int = None
+                    if raw_sample_id is not None and pd.notna(raw_sample_id):
+                        try:
+                            sample_id_int = int(raw_sample_id)
+                        except Exception:
+                            sample_id_int = None
+
+                    if sample_id_int is not None:
+                        existing = unknown_site_sample_ids.get(site_name_str)
+                        if existing is None:
+                            unknown_site_sample_ids[site_name_str] = [sample_id_int]
+                        elif isinstance(existing, list):
+                            if len(existing) < unknown_site_sample_ids_limit_per_site:
+                                existing.append(sample_id_int)
+                            else:
+                                unknown_site_sample_ids_truncated = True
                 logger.warning(f"Site {site_name} not found in database - skipping")
                 continue
             date_str = row['Date'].strftime('%Y-%m-%d')
@@ -251,6 +276,10 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
             'records_inserted': records_inserted,
             'skipped_records_unknown_sites': skipped_records_unknown_sites,
             'unknown_sites': sorted(unknown_sites),
+            'unknown_site_counts': dict(sorted(unknown_site_counts.items())),
+            'unknown_site_sample_ids': dict(sorted(unknown_site_sample_ids.items())),
+            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
         }
         
     except Exception as e:
