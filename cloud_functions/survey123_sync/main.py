@@ -328,11 +328,38 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             else:
                 feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
                 if feature_server_blob.exists():
-                    last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
-                    sync_strategy = 'editdate'
-                    sync_marker = last_sync.isoformat()
-                    logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
-                    records = arcgis_sync.fetch_features_edited_since(last_sync)
+                    existing_metadata = None
+                    try:
+                        raw_metadata = feature_server_blob.download_as_string()
+                        if isinstance(raw_metadata, (bytes, bytearray)):
+                            raw_metadata = raw_metadata.decode('utf-8')
+                        if isinstance(raw_metadata, str) and raw_metadata.strip():
+                            existing_metadata = json.loads(raw_metadata)
+                        elif isinstance(raw_metadata, dict):
+                            existing_metadata = raw_metadata
+                    except Exception as e:
+                        logger.warning(
+                            f"Unable to parse FeatureServer sync metadata {feature_server_metadata_blob}: {e}"
+                        )
+                        existing_metadata = None
+
+                    backfill_since_date = None
+                    if isinstance(existing_metadata, dict) and existing_metadata.get('needs_backfill'):
+                        backfill_since_date = existing_metadata.get('backfill_since_date')
+
+                    if backfill_since_date:
+                        sync_strategy = 'day_backfill'
+                        sync_marker = str(backfill_since_date)
+                        logger.info(
+                            f"FeatureServer sync strategy=day_backfill since_date={sync_marker}"
+                        )
+                        records = arcgis_sync.fetch_features_since(sync_marker)
+                    else:
+                        last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
+                        sync_strategy = 'editdate'
+                        sync_marker = last_sync.isoformat()
+                        logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
+                        records = arcgis_sync.fetch_features_edited_since(last_sync)
                 else:
                     since_date = _get_db_latest_chemical_date(temp_db.name)
                     sync_strategy = 'day'
@@ -400,6 +427,14 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
 
             skipped_unknown_site_records = insert_result.get('skipped_records_unknown_sites', 0)
             unknown_sites = insert_result.get('unknown_sites')
+            unknown_site_counts = insert_result.get('unknown_site_counts') or {}
+            unknown_site_sample_ids = insert_result.get('unknown_site_sample_ids') or {}
+            unknown_site_sample_ids_truncated = bool(
+                insert_result.get('unknown_site_sample_ids_truncated', False)
+            )
+            unknown_site_sample_ids_limit_per_site = insert_result.get(
+                'unknown_site_sample_ids_limit_per_site'
+            )
 
             classification_result = classify_active_sites_in_db(temp_db.name)
             if 'error' in classification_result:
@@ -421,8 +456,20 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
+    needs_backfill = bool(skipped_unknown_site_records)
+    backfill_since_date = None
+    if sync_strategy in ('day', 'day_override', 'day_backfill'):
+        backfill_since_date = sync_marker if needs_backfill else None
+
+    watermark_timestamp = start_time
+    if needs_backfill and sync_strategy in ('editdate', 'editdate_override'):
+        try:
+            watermark_timestamp = last_sync
+        except Exception:
+            watermark_timestamp = start_time
+
     db_manager.update_sync_timestamp(
-        start_time,
+        watermark_timestamp,
         metadata_blob_name=feature_server_metadata_blob,
         metadata_extra={
             'mode': 'feature_server',
@@ -433,6 +480,12 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_inserted': insert_result.get('records_inserted', 0),
             'skipped_records_unknown_sites': skipped_unknown_site_records,
             'unknown_sites': unknown_sites or [],
+            'unknown_site_counts': unknown_site_counts,
+            'unknown_site_sample_ids': unknown_site_sample_ids,
+            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+            'needs_backfill': needs_backfill,
+            'backfill_since_date': backfill_since_date,
         },
     )
 
@@ -445,6 +498,12 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'records_inserted': insert_result.get('records_inserted', 0),
         'skipped_records_unknown_sites': skipped_unknown_site_records,
         'unknown_sites': unknown_sites or [],
+        'unknown_site_counts': unknown_site_counts,
+        'unknown_site_sample_ids': unknown_site_sample_ids,
+        'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+        'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+        'needs_backfill': needs_backfill,
+        'backfill_since_date': backfill_since_date,
         'execution_time': str(datetime.now() - start_time),
         'sync_strategy': sync_strategy,
         'sync_marker': sync_marker,
