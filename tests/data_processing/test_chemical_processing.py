@@ -343,6 +343,14 @@ class TestChemicalProcessing(unittest.TestCase):
             """
         )
 
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX idx_chemical_collection_events_sample_id
+            ON chemical_collection_events(sample_id)
+            WHERE sample_id IS NOT NULL
+            """
+        )
+
         event_id_1 = insert_collection_event(
             cursor,
             site_id=1,
