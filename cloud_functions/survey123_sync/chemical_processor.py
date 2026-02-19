@@ -6,6 +6,7 @@ Reuses existing processing pipeline for consistency with main dashboard.
 
 import logging
 import os
+import re
 import sqlite3
 import sys
 from typing import Any, Dict
@@ -144,18 +145,54 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         site_query = "SELECT site_id, site_name FROM sites"
         site_df = pd.read_sql_query(site_query, conn)
         site_lookup = dict(zip(site_df['site_name'], site_df['site_id']))
+
+        def _normalize_site_name(name: Any) -> str:
+            if name is None or pd.isna(name):
+                return ''
+            normalized = re.sub(r'\s+', ' ', str(name).strip())
+            return normalized.rstrip('.')
+
+        normalized_site_lookup: Dict[str, int] = {}
+        for db_site_name, db_site_id in site_lookup.items():
+            normalized = _normalize_site_name(db_site_name).casefold()
+            if normalized and normalized not in normalized_site_lookup:
+                normalized_site_lookup[normalized] = db_site_id
+
+        site_aliases = {
+            'cow creek: virginia avenue': 'Cow Creek: West Virginia Avenue',
+            'cow creek: virginia ave': 'Cow Creek: West Virginia Avenue',
+        }
         
         records_inserted = 0
+        skipped_records_unknown_sites = 0
+        unknown_sites = set()
         has_sample_id = 'sample_id' in df.columns
         
         for _, row in df.iterrows():
             site_name = row['Site_Name']
-            
-            if site_name not in site_lookup:
+
+            site_id = site_lookup.get(site_name)
+            if site_id is None:
+                normalized_key = _normalize_site_name(site_name).casefold()
+                site_id = normalized_site_lookup.get(normalized_key)
+
+            if site_id is None:
+                normalized_key = _normalize_site_name(site_name).casefold()
+                canonical_name = site_aliases.get(normalized_key)
+                if canonical_name:
+                    site_id = site_lookup.get(canonical_name)
+                    if site_id is None:
+                        site_id = normalized_site_lookup.get(
+                            _normalize_site_name(canonical_name).casefold()
+                        )
+                    if site_id is not None:
+                        site_name = canonical_name
+
+            if site_id is None:
+                unknown_sites.add(str(site_name).strip())
+                skipped_records_unknown_sites += 1
                 logger.warning(f"Site {site_name} not found in database - skipping")
                 continue
-            
-            site_id = site_lookup[site_name]
             date_str = row['Date'].strftime('%Y-%m-%d')
 
             sample_id = None
@@ -206,7 +243,11 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         conn.close()
         
         logger.info(f"Successfully inserted {records_inserted} measurements")
-        return {'records_inserted': records_inserted}
+        return {
+            'records_inserted': records_inserted,
+            'skipped_records_unknown_sites': skipped_records_unknown_sites,
+            'unknown_sites': sorted(unknown_sites),
+        }
         
     except Exception as e:
         logger.error(f"Error inserting data to database: {e}")
