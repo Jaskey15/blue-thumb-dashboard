@@ -35,10 +35,11 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Interactive Chat**: Available on every tab with persistent conversation history
 
 ### Cloud-Powered Data Pipeline
-- **Automated Daily Sync**: Processes new Survey123 submissions at 6 AM Central
+- **Dual Sync Modes**: Survey123 authenticated API and public ArcGIS FeatureServer
+- **Real-Time FeatureServer Sync**: Incremental sync via EditDate watermarks with idempotent insertion
+- **Live Database Refresh**: Cloud Run automatically detects and downloads updated databases from GCS
 - **Smart Data Processing**: Handles range-based measurements and validation
 - **Backup Management**: Automatic database backups before each update
-- **Error Handling**: Comprehensive logging and monitoring
 - **Cost-Efficient**: <$1/year operational costs
 
 ### Comprehensive Chemical Analysis
@@ -66,21 +67,23 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 ```
 ├── app.py                
 ├── requirements.txt       
-├── cloud_functions/     
-│   └── survey123_sync/    # Automated data synchronization
-│       ├── main.py      
-│       ├── chemical_processor.py 
-│       ├── deploy.sh      
+├── cloud_functions/
+│   └── survey123_sync/    # Automated data synchronization (Survey123 + FeatureServer modes)
+│       ├── main.py        # Dual-mode entry point
+│       ├── chemical_processor.py
+│       ├── deploy.sh      # Stages shared modules for deployment
 │       └── requirements.txt
-├── database/             # Database schema and connection utilities
-│   ├── db_schema.py    
-│   └── reset_database.py 
+├── database/             # Database schema, connections, GCS-backed refresh
+│   ├── db_schema.py
+│   ├── database.py       # Connection management with Cloud Run GCS refresh
+│   └── reset_database.py
 ├── data_processing/      # Comprehensive data cleaning and processing pipeline
-│   ├── data_loader.py   
-│   ├── site_processing.py 
-│   ├── chemical_processing.py 
-│   ├── fish_processing.py 
-│   ├── macro_processing.py 
+│   ├── data_loader.py
+│   ├── site_processing.py
+│   ├── chemical_processing.py
+│   ├── arcgis_sync.py    # Real-time ArcGIS FeatureServer sync
+│   ├── fish_processing.py
+│   ├── macro_processing.py
 │   └── habitat_processing.py 
 ├── callbacks/             # Interactive dashboard logic
 │   ├── chatbot_callbacks.py 
@@ -145,9 +148,9 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 
 ### Data Processing Pipeline
 - **ETL Architecture**: Comprehensive processes for multiple data types across 370+ sites
-- **Real-time Integration**: Automated Survey123 form processing with ArcGIS API
-- **Data Validation**: duplicate detection and quality assurance
-- **Scalable Design**: Cloud-native architecture for production deployment
+- **Dual Real-time Integration**: Survey123 API and public ArcGIS FeatureServer sync with idempotent insertion
+- **Data Validation**: Duplicate detection, QAQC gating, and quality assurance
+- **Scalable Design**: Cloud-native architecture with live database refresh on Cloud Run
 
 ### AI-Powered User Experience  
 - **Contextual Assistance**: Tab-aware chatbot providing relevant stream health guidance

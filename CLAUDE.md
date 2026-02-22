@@ -40,11 +40,11 @@ tests/                          # 51 test files mirroring source structure
 - **BDL handling**: Zero = below detection limit (replaced with threshold). NaN = data gap (preserved)
 - **Callbacks**: All use `prevent_initial_call=True`. Registered centrally in `callbacks/__init__.py`
 - **State**: `dcc.Store` for session persistence. Priority: saved state > navigation state > defaults
-- **Two chemical pipelines**: `chemical_processing.py` (original single-value) vs `updated_chemical_processing.py` (newer multi-range Low/Mid/High format). Both share `chemical_utils.py`
+- **Three chemical data pathways**: `chemical_processing.py` (original single-value CSV), `updated_chemical_processing.py` (multi-range Low/Mid/High CSV), and `arcgis_sync.py` (real-time FeatureServer). All share `chemical_utils.py`
 
 ## Gotchas
 
-- **`updated_chemical_processing.py` is NOT a newer version of `chemical_processing.py`** — they handle different data formats from different collection periods. Both are active.
+- **`updated_chemical_processing.py` is NOT a newer version of `chemical_processing.py`** — they handle different data formats from different collection periods. Both are active. `arcgis_sync.py` is a third pathway that fetches from the FeatureServer and feeds into the same pipeline as `updated_chemical_processing.py`.
 - **Sites must exist before loading any data type** — all processing tables have foreign keys to `sites`. Run site pipeline first.
 - **`data/raw/` is read-only** — never modify raw CSVs. Cleaned versions go to `data/interim/`.
 - **`data_queries.py` is the only retrieval interface** — callbacks and visualizations should never query the DB directly. All reads go through this module.
@@ -59,7 +59,7 @@ tests/                          # 51 test files mirroring source structure
 | Add a new dashboard tab | `layouts/tabs/` (layout), `callbacks/` (new callback module), `callbacks/__init__.py` (register) |
 | Change how data is queried for display | `data_processing/data_queries.py` |
 | Modify map behavior | `visualizations/map_viz.py`, `visualizations/map_queries.py`, `callbacks/overview_callbacks.py` |
-| Update cloud sync logic | `cloud_functions/survey123_sync/main.py`, `chemical_processor.py` |
+| Update cloud sync logic | `cloud_functions/survey123_sync/main.py`, `chemical_processor.py`, `data_processing/arcgis_sync.py` |
 | Change status thresholds | `db_schema.py` (CHEMICAL_REFERENCE_VALUES constant) |
 
 ## Testing

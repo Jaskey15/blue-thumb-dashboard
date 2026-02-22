@@ -83,7 +83,7 @@ tests/
 ├── survey123_sync/         → Cloud function tests
 │   ├── test_arcgis_auth.py
 │   ├── test_chemical_processor.py
-│   ├── test_data_processing.py
+│   ├── test_data_processing.py  → Includes TestSyncModeBehavior (FeatureServer sync mode, routing, metadata)
 │   ├── test_database_manager.py
 │   └── test_survey123_fetcher.py
 ├── visualizations/         → Chart generation
@@ -113,6 +113,10 @@ tests/
 - Data query correctness and formatting
 - Visualization output structure
 - Database schema integrity and constraint enforcement
+- ArcGIS FeatureServer field translation and site name normalization
+- `sample_id`-based idempotent chemical event insertion
+- Cloud Function sync mode selection and precedence
+- FeatureServer sync pipeline (fetch, process, upload, metadata tracking)
 
 ## Key Fixtures
 

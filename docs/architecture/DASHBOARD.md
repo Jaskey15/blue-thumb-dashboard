@@ -120,3 +120,4 @@ Loaded via markdown readers in layout files. Used for educational content in tab
 
 - `config/gcp_config.py` — Environment detection (local vs GCP), asset URLs, DB paths, log levels
 - `config/shared_constants.py` — `PARAMETER_DISPLAY_NAMES`, `PARAMETER_AXIS_LABELS`, `SEASON_MONTHS`
+- `database/database.py` — On Cloud Run, manages GCS-backed database with background refresh thread and per-request generation checks (see `docs/architecture/DATABASE_SCHEMA.md` for details)

@@ -17,6 +17,21 @@ The ETL pipeline must run in this order — each stage depends on the previous:
 
 The full pipeline is orchestrated by `database/reset_database.py`.
 
+## Real-Time Data Ingestion
+
+In addition to the batch CSV pipeline above, chemical data is also ingested in real-time from the ArcGIS FeatureServer via `data_processing/arcgis_sync.py`. This module:
+
+1. Fetches QAQC-verified records from the public FeatureServer REST API (no authentication required)
+2. Translates FeatureServer field names to the CSV column names the existing pipeline expects
+3. Runs translated data through the same chemical processing pipeline as CSV data
+4. Inserts into the database using `sample_id`-based idempotent insertion (prevents duplicates on re-sync)
+
+Two fetch strategies are supported:
+- **Date-based** (`fetch_features_since`) — fetches by sampling date (`day` field). Used for initial sync.
+- **EditDate-based** (`fetch_features_edited_since`) — fetches by last-edited timestamp. Used for incremental syncs after the first run.
+
+The Cloud Function orchestrates this via `mode=feature_server` (see Deployment docs).
+
 ## File Roles
 
 | File | Purpose |
@@ -27,7 +42,8 @@ The full pipeline is orchestrated by `database/reset_database.py`.
 | `merge_sites.py` | Find coordinate duplicates via boundary-safe Haversine clustering (50m default threshold, floor-bin + neighbor-bin expansion, union-find transitive grouping). Merge to preferred site, reassign all monitoring data. Legacy rounding mode available via `boundary_safe=False` |
 | `chemical_processing.py` | Process `cleaned_chemical_data.csv` — standard single-value chemical measurements |
 | `updated_chemical_processing.py` | Process `cleaned_updated_chemical_data.csv` — newer multi-range format (Low/Mid/High) |
-| `chemical_utils.py` | Shared chemical constants, validation, BDL conversion, status determination, DB insertion |
+| `chemical_utils.py` | Shared chemical constants, validation, BDL conversion, status determination, DB insertion. Supports `sample_id`-based idempotent event insertion |
+| `arcgis_sync.py` | Real-time FeatureServer sync: fetch, translate field names, normalize sites, process, and insert chemical data from the public ArcGIS endpoint |
 | `fish_processing.py` | Fish IBI scores with date correction via `bt_fieldwork_validator` |
 | `bt_fieldwork_validator.py` | Validates fish dates against Blue Thumb field work records, detects replicates vs duplicates |
 | `macro_processing.py` | Macroinvertebrate metrics grouped by (site, sample_id, habitat, season) |
@@ -36,14 +52,15 @@ The full pipeline is orchestrated by `database/reset_database.py`.
 | `data_queries.py` | All database retrieval functions used by the dashboard (pivoted data, status columns, date ranges) |
 | `prepare_chatbot_data.py` | Extracts markdown/text content for Vertex AI chatbot knowledge base |
 
-## Two Chemical Pipelines
+## Three Chemical Data Pathways
 
-There are two separate chemical data formats from different collection periods:
+There are three chemical data ingestion pathways:
 
-- **`chemical_processing.py`** — Original format. Single value per parameter. Uses `cleaned_chemical_data.csv`.
-- **`updated_chemical_processing.py`** — Newer format. Parameters measured across Low/Mid/High ranges with a selection column. Uses `cleaned_updated_chemical_data.csv`. Applies range selection logic (e.g., pick greater of two readings, pH furthest from neutral 7.0).
+- **`chemical_processing.py`** — Original CSV format. Single value per parameter. Uses `cleaned_chemical_data.csv`.
+- **`updated_chemical_processing.py`** — Newer CSV format. Parameters measured across Low/Mid/High ranges with a selection column. Uses `cleaned_updated_chemical_data.csv`. Applies range selection logic (e.g., pick greater of two readings, pH furthest from neutral 7.0).
+- **`arcgis_sync.py`** — Real-time FeatureServer sync. Fetches records from the public ArcGIS FeatureServer, translates field names to match the `updated_chemical_processing` pipeline schema, and processes through the same pipeline. Uses `objectid` as `sample_id` for idempotent insertion.
 
-Both pipelines share `chemical_utils.py` for validation, BDL handling, and database insertion.
+All three pathways share `chemical_utils.py` for validation, BDL handling, and database insertion.
 
 ## Site Deduplication
 

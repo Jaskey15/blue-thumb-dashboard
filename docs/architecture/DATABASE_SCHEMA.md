@@ -43,12 +43,12 @@ chemical_parameters (parameter_id PK)
 |--------|------|-------|
 | event_id | INTEGER PK | Auto-increment |
 | site_id | INTEGER FK | References sites |
-| sample_id | INTEGER | Optional |
+| sample_id | INTEGER | Optional. When present, enforces idempotent insertion via partial unique index |
 | collection_date | TEXT | YYYY-MM-DD format |
 | year | INTEGER | |
 | month | INTEGER | |
 
-Duplicates allowed (same site + date) to preserve replicate samples.
+Duplicates allowed (same site + date) to preserve replicate samples. When `sample_id` is provided (e.g., from FeatureServer `objectid`), the partial unique index prevents duplicate events for the same sample. Re-inserting a record with an existing `sample_id` returns the existing `event_id` instead of creating a new row.
 
 ### chemical_measurements
 | Column | Type | Notes |
@@ -117,6 +117,8 @@ Thresholds for status determination. Populated by `db_schema.py` at table creati
 
 ```sql
 idx_chemical_site_date    ON chemical_collection_events(site_id, collection_date)
+idx_chemical_collection_events_sample_id ON chemical_collection_events(sample_id)
+                          WHERE sample_id IS NOT NULL    -- partial unique index for idempotent FeatureServer inserts
 idx_chemical_measurements ON chemical_measurements(event_id, parameter_id)
 idx_macro_site_season     ON macro_collection_events(site_id, season, year)
 idx_fish_site_year        ON fish_collection_events(site_id, year)
@@ -137,7 +139,16 @@ finally:
     close_connection(conn)
 ```
 
-- `get_connection()` → creates connection, enables foreign keys
+- `get_connection()` → creates connection, enables foreign keys. On Cloud Run, downloads DB from GCS on first call and starts a background refresh thread
 - `close_connection(conn)` → commits and closes
 - `execute_query(query, params)` → wrapper with rollback on error
 - Always use parameterized queries (`?` placeholders) — never string formatting
+
+### Cloud Run DB Lifecycle
+
+On Cloud Run (detected via `K_SERVICE` env var), `get_connection()` manages a GCS-backed database:
+
+1. **First call**: Downloads `blue_thumb.db` from the `GCS_BUCKET_DATABASE` bucket to `/tmp`
+2. **Background refresh**: A daemon thread polls the GCS blob generation every `DB_REFRESH_INTERVAL_SECONDS` (default 300s) and re-downloads if changed
+3. **Per-request check**: Each `get_connection()` call does a lightweight generation comparison (rate-limited to the refresh interval) and downloads if a newer version exists
+4. **Fallback**: If GCS download fails, falls back to the Docker-bundled database at `database/blue_thumb.db`

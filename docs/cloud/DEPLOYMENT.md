@@ -56,15 +56,45 @@ GCS_BUCKET_DATABASE=blue-thumb-database
 GCS_ASSET_BUCKET=blue-thumb-assets
 ```
 
+Optional:
+```
+GCS_DB_BLOB_NAME=blue_thumb.db          # Blob name in bucket (default: blue_thumb.db)
+DB_REFRESH_INTERVAL_SECONDS=300         # How often to check GCS for DB updates (default: 300)
+```
+
 Vertex AI (chatbot) authenticates via the Cloud Run service account — no API key needed.
 
-## Cloud Function: Survey123 Sync
+### Database Refresh on Cloud Run
 
-Located in `cloud_functions/survey123_sync/`. Runs daily to fetch new Survey123 submissions and update the database.
+Cloud Run no longer relies solely on the Docker-baked database. On startup, `database.py` downloads the latest database from GCS and starts a background daemon thread that polls for updates by comparing the GCS blob generation number. Each incoming request also triggers a lightweight generation check (rate-limited). This keeps the dashboard in sync with Cloud Function updates without requiring redeployment.
+
+## Cloud Function: Data Sync
+
+Located in `cloud_functions/survey123_sync/`. Supports two sync modes for fetching new chemical data and updating the database.
 
 ### Components
-- **`main.py`** — Entry point. ArcGIS OAuth2 auth → fetch submissions → process → upload DB
-- **`chemical_processor.py`** — Handles range-based chemical value processing and status classification
+- **`main.py`** — Entry point. Routes to Survey123 or FeatureServer sync based on mode
+- **`chemical_processor.py`** — Chemical value processing, status classification, site reclassification, and idempotent DB insertion with `sample_id` support
+
+### Sync Modes
+
+The Cloud Function supports two modes, selected via query param, JSON body, `SYNC_MODE` env var, or default (`survey123`):
+
+| Mode | Source | Auth | Use Case |
+|------|--------|------|----------|
+| `survey123` | Survey123 private API | OAuth2 (client credentials) | Original authenticated pathway |
+| `feature_server` | Public ArcGIS FeatureServer | None required | Real-time sync from public endpoint |
+
+**Mode precedence**: query param `?mode=` > JSON body `{"mode": ""}` > `SYNC_MODE` env var > default `survey123`
+
+### FeatureServer Sync Strategy
+
+The FeatureServer mode uses an adaptive sync strategy:
+
+1. **First run** (no prior FeatureServer sync metadata): Fetches by sampling date (`day` field) from the DB's latest chemical date
+2. **Subsequent runs**: Fetches by `EditDate` timestamp from the last successful sync, catching both new records and edits to existing ones
+
+Sync metadata is stored separately at `sync_metadata/last_feature_server_sync.json` in GCS.
 
 ### Deployment
 
@@ -73,15 +103,27 @@ cd cloud_functions/survey123_sync
 ./deploy.sh
 ```
 
-Deploy config: Python 3.12, 512MB memory, 540s timeout, us-central1.
+Deploy config: Python 3.12, 512MB memory, 540s timeout, us-central1, max 1 instance.
+
+`deploy.sh` creates a staging directory that bundles the function code with shared project modules (`utils.py`, `config/`, `data_processing/`, `database/`). The bundled database file is excluded from staging.
 
 ### Required Environment Variables (Cloud Function)
 
 ```
 GCS_BUCKET_DATABASE=blue-thumb-database
+```
+
+For Survey123 mode only:
+```
 ARCGIS_CLIENT_ID=<service-account-id>
 ARCGIS_CLIENT_SECRET=<service-account-secret>
 SURVEY123_FORM_ID=<form-id>
+```
+
+Optional:
+```
+SYNC_MODE=feature_server    # Default sync mode (default: survey123)
+GCS_DB_BLOB_NAME=blue_thumb.db  # Blob name in bucket (default: blue_thumb.db)
 ```
 
 ### Cloud Scheduler
@@ -96,7 +138,7 @@ gcloud scheduler jobs create http survey123-daily-sync \
   --time-zone="America/Chicago"
 ```
 
-### Sync Flow
+### Sync Flow (Survey123 mode)
 
 1. Download database from Cloud Storage bucket
 2. Create backup of current database
@@ -104,7 +146,22 @@ gcloud scheduler jobs create http survey123-daily-sync \
 4. Fetch new Survey123 submissions since last sync
 5. Process chemical data (range selection, status classification)
 6. Insert into local SQLite
-7. Upload updated database back to Cloud Storage
+7. Reclassify sites as active/historic
+8. Upload updated database back to Cloud Storage
+9. Clean up temp DB file
+
+### Sync Flow (FeatureServer mode)
+
+1. Download database from Cloud Storage to temp file
+2. Determine sync strategy (date-based or EditDate-based)
+3. Fetch QAQC-verified records from public FeatureServer
+4. Translate FeatureServer field names to pipeline schema
+5. Process through shared chemical pipeline
+6. Insert with `sample_id`-based idempotency (no duplicates on re-sync)
+7. Reclassify sites as active/historic
+8. Upload updated database back to Cloud Storage
+9. Record sync metadata (strategy, marker, record counts)
+10. Clean up temp DB file
 
 ## Logging
 
@@ -124,3 +181,5 @@ logs/
 ```
 
 Setup via `utils.setup_logging(module_name, category=...)`.
+
+In cloud environments (Cloud Run, Cloud Functions), `setup_logging()` detects the environment via `K_SERVICE`, `K_REVISION`, `FUNCTION_TARGET`, or `GAE_APPLICATION` and writes logs to `/tmp` instead of searching for the project root.
