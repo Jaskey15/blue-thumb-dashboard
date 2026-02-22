@@ -40,7 +40,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Live Database Refresh**: Cloud Run automatically detects and downloads updated databases from GCS
 - **Smart Data Processing**: Handles range-based measurements and validation
 - **Backup Management**: Automatic database backups before each update
-- **Cost-Efficient**: <$1/year operational costs
+- **Cost-Efficient**: <$5/month operational costs
 
 ### Comprehensive Chemical Analysis
 - Time series visualization of key water quality parameters
