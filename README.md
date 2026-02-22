@@ -96,7 +96,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 │   └── tabs/          
 ├── visualizations/      
 ├── data/
-│   ├── raw/            # Original CSV data files
+│   ├── raw/            # Source CSV files (not included — see Data Access)
 │   ├── interim/        # Cleaned and validated data
 │   └── processed/      # Database-ready outputs
 │       └── chatbot_data/ # AI knowledge base content
@@ -130,17 +130,23 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
    pip install -r requirements.txt
    ```
 
-4. **Load the monitoring data**
+4. **Obtain the source data**
+
+   Raw CSV files are not included in the repository. See the [Data Access](#data-access) section below for download links and API details.
+
+   Place downloaded CSV files in `data/raw/` to match the expected directory structure.
+
+5. **Load the monitoring data**
    ```bash
    python -m database.reset_database
    ```
 
-5. **Start the dashboard**
+6. **Start the dashboard**
    ```bash
    python app.py
    ```
 
-6. **Open your browser**
+7. **Open your browser**
    Navigate to http://127.0.0.1:8050
 
 
@@ -181,14 +187,38 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - [ ] **Weather Integration**: Precipitation correlation analysis
 - [ ] **API Development**: Public API for researchers and third-party applications
 
-## Data Source
+## Data Access
 
-This dashboard uses data from the [Blue Thumb Volunteer Stream Monitoring Program](https://www.bluethumbok.com/), administered by the Oklahoma Conservation Commission. Blue Thumb trains citizen volunteers to collect standardized water quality data, creating one of the most comprehensive stream monitoring datasets in Oklahoma with over 370 active and historical monitoring sites.
+This dashboard uses data from the [Blue Thumb Volunteer Stream Monitoring Program](https://www.bluethumbok.com/), administered by the Oklahoma Conservation Commission. Raw data files are not included in this repository and must be obtained separately.
+
+### Legacy Data (Biological, Habitat, and Historical Chemical)
+
+All biological, habitat, and legacy chemical monitoring data can be downloaded as CSV files from the OCC Water Quality portal:
+
+https://occwaterquality.shinyapps.io/OCC-app23b/
+
+Place downloaded files in `data/raw/` and run `python -m database.reset_database` to build the local database.
+
+### Updated Chemical Data (ArcGIS FeatureServer)
+
+Current chemical monitoring data is collected via ArcGIS Survey123 and served through a public FeatureServer REST API. No authentication is required.
+
+**REST API endpoint:**
+```
+https://services5.arcgis.com/L6JGkSUcgPo1zSDi/arcgis/rest/services/bluethumb_oct2020_view/FeatureServer/0/query
+```
+
+Example query to fetch recent records:
+```
+?where=1%3D1&outFields=*&resultRecordCount=10&orderByFields=EditDate+DESC&f=json
+```
+
+The dashboard's Cloud Function uses this API for automated daily syncs (see `data_processing/arcgis_sync.py`). You can also browse the data interactively via the [Blue Thumb Web Map](https://okconservation.maps.arcgis.com/apps/webappviewer/index.html?id=1654493dccdd42c29d170785c6b242bf).
 
 ## Acknowledgments
 
 - **Blue Thumb Program** - Oklahoma Conservation Commission
-- **Volunteer Monitors** - Citizens collecting water quality data across 370+ sites statewide  
+- **Volunteer Monitors** - Citizens collecting water quality data across 370+ sites statewide
 
 ---
 
