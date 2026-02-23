@@ -158,17 +158,17 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Data Validation**: Duplicate detection, QAQC gating, and quality assurance
 - **Scalable Design**: Cloud-native architecture with live database refresh on Cloud Run
 
-### AI-Powered User Experience  
-- **Contextual Assistance**: Tab-aware chatbot providing relevant stream health guidance
-- **Knowledge Grounding**: Responses based on authoritative Blue Thumb documentation
-- **Intelligent Fallback**: Google Search integration for comprehensive coverage
-- **Natural Interaction**: Conversational interface with typing indicators and message history
-
 ### Testing & Quality Assurance
 - **Comprehensive Test Suite**: 700+ tests ensuring reliability across all components
 - **Automated CI/CD**: Continuous integration with quality checks
 - **Data Validation**: Multi-layer validation ensuring data integrity
 - **Performance Monitoring**: Real-time tracking of system performance
+
+### AI-Powered User Experience  
+- **Contextual Assistance**: Context-aware chatbot providing relevant stream health guidance
+- **Knowledge Grounding**: Responses based on authoritative Blue Thumb documentation
+- **Intelligent Fallback**: Google Search integration for comprehensive coverage
+- **Natural Interaction**: Conversational interface with typing indicators and message history
 
 ## Impact & Results
 
