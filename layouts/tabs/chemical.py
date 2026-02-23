@@ -5,16 +5,12 @@ Chemical tab layout for the dashboard
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from data_processing.data_queries import get_chemical_date_range
 from layouts.components.chatbot import create_floating_chatbot
 
 
 def create_chemical_tab():
     """Create the chemical data tab layout with searchable dropdown for site selection."""
 
-    # Get dynamic date range
-    min_year, max_year = get_chemical_date_range()
-    
     return html.Div([
         dcc.Download(id="chemical-download-component"),
 
@@ -90,8 +86,8 @@ def create_chemical_tab():
                     ),
                     dcc.Dropdown(
                         id='start-year-dropdown',
-                        options=[{'label': str(year), 'value': year} for year in range(min_year, max_year + 1)],
-                        value=min_year,
+                        options=[],
+                        value=None,
                         clearable=False,
                         style={"display": "inline-block", "vertical-align": "middle", "width": "120px"}
                     )
@@ -104,8 +100,8 @@ def create_chemical_tab():
                     ),
                     dcc.Dropdown(
                         id='end-year-dropdown',
-                        options=[{'label': str(year), 'value': year} for year in range(min_year, max_year + 1)],
-                        value=max_year,
+                        options=[],
+                        value=None,
                         clearable=False,
                         style={"display": "inline-block", "vertical-align": "middle", "width": "120px"}
                     )
