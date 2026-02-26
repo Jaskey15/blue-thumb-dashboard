@@ -34,77 +34,50 @@ def load_csv_files():
     
     return site_data, updated_chemical, chemical_data
 
-def find_duplicate_coordinate_groups(conn=None, boundary_safe=True, distance_threshold_m=50.0, scale=1000):
-    """Find candidate duplicate sites by location.
+def find_duplicate_coordinate_groups(conn=None, distance_threshold_m=50.0):
+    """Find candidate duplicate sites by Haversine distance clustering.
 
-    This is the core "candidate grouping" step used by both analysis and merge workflows.
-
-    Default behavior (`boundary_safe=False`):
-    - Treats sites as duplicates if they share the same `ROUND(latitude, 3)` and
-      `ROUND(longitude, 3)` bins (i.e., identical 3-decimal rounding as computed
-      by SQLite in the query).
-    - Returns the subset of rows that belong to bins containing more than one site.
-
-    Boundary-safe behavior (`boundary_safe=True`):
-    - Uses a two-stage approach:
-      1) Candidate generation by binning coordinates into fixed "floor bins":
-         `lat_bin = floor(latitude * scale)`, `lon_bin = floor(longitude * scale)`.
-         With the default `scale=1000`, bins correspond to 0.001 degrees.
+    Uses a two-stage approach:
+      1) Candidate generation by binning coordinates into fixed floor bins:
+         lat_bin = floor(latitude * 1000), lon_bin = floor(longitude * 1000).
+         Bins correspond to ~0.001 degrees.
       2) For each site, compares against sites in the same bin and the 8 neighboring
-         bins (±1 bin in latitude and longitude) and computes Haversine distance.
-         Pairs with distance `<= distance_threshold_m` are unioned into clusters.
-    - Clustering is transitive (A close to B, B close to C => A/B/C become one group)
-      via union-find.
-    - Returns only clustered rows (clusters with size > 1) and includes a `group_id`
-      column identifying the cluster.
+         bins and computes Haversine distance. Pairs within distance_threshold_m are
+         unioned into clusters via union-find (transitive).
 
     Args:
-        conn: Optional SQLite connection. If omitted, this function opens/closes
-            its own connection.
-        boundary_safe: If True, enable neighbor-bin expansion + Haversine distance
-            clustering to catch rounding-boundary misses.
-        distance_threshold_m: Distance threshold (meters) for boundary-safe clustering.
-        scale: Bin scaling factor for boundary-safe candidate generation. `1000`
-            corresponds to 0.001-degree bins.
+        conn: Optional SQLite connection. If omitted, opens/closes its own.
+        distance_threshold_m: Distance threshold in meters for clustering (default 50.0).
 
     Returns:
-        A pandas DataFrame of candidate duplicate sites.
-        - If `boundary_safe=False`: includes `rounded_lat`/`rounded_lon` and all
-          query columns; no `group_id` column.
-        - If `boundary_safe=True`: includes all query columns plus `group_id`.
-        Empty DataFrames are returned when no duplicates are detected.
+        A pandas DataFrame of candidate duplicate sites with a group_id column
+        identifying each cluster. Empty DataFrame when no duplicates detected.
     """
     if conn is None:
         conn = get_connection()
         should_close = True
     else:
         should_close = False
-    
+
     try:
         query = """
-        SELECT 
+        SELECT
             site_id,
             site_name,
-            ROUND(latitude, 3) as rounded_lat,
-            ROUND(longitude, 3) as rounded_lon,
             latitude,
             longitude,
             county,
             river_basin,
             ecoregion
-        FROM sites 
+        FROM sites
         WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-        ORDER BY rounded_lat, rounded_lon, site_name
+        ORDER BY site_name
         """
-        
+
         df = pd.read_sql_query(query, conn)
-
-        if not boundary_safe:
-            duplicate_groups = df.groupby(['rounded_lat', 'rounded_lon']).filter(lambda x: len(x) > 1)
-            return duplicate_groups
-
         df = df.reset_index(drop=True)
 
+        scale = 1000
         bin_to_indices = {}
         lat_bins = [0] * len(df)
         lon_bins = [0] * len(df)
