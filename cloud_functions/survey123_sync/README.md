@@ -1,12 +1,13 @@
-# Survey123 Daily Sync Cloud Function
+# Data Sync Cloud Function
 
-This Cloud Function provides automated daily synchronization of Survey123 form submissions with the Blue Thumb Dashboard database.
+This Cloud Function provides automated daily synchronization of chemical data with the Blue Thumb Dashboard database. It supports two sync modes: **Survey123** (authenticated API) and **FeatureServer** (public ArcGIS endpoint).
 
 ## Overview
 
-The Survey123 sync function:
+The sync function:
 - **Runs daily at 6 AM Central Time** via Cloud Scheduler
-- **Fetches new submissions** from Survey123 via ArcGIS REST API
+- **Supports dual sync modes**: Survey123 (OAuth2) or FeatureServer (public)
+- **Fetches new chemical data** from ArcGIS REST APIs
 - **Processes chemical data** using existing Blue Thumb logic
 - **Updates SQLite database** stored in Cloud Storage
 - **Creates automatic backups** before each update
@@ -15,19 +16,24 @@ The Survey123 sync function:
 ## Architecture
 
 ```
-Survey123 Form ➜ ArcGIS API ➜ Cloud Function ➜ Cloud Storage ➜ Dashboard
-                                     ↓
-                              Processing Logic
-                            (Chemical Analysis)
+Survey123 Form ──➜ ArcGIS API (OAuth2) ──┐
+                                          ├➜ Cloud Function ➜ Cloud Storage ➜ Dashboard
+ArcGIS FeatureServer (public) ────────────┘        ↓
+                                            Processing Logic
+                                          (Chemical Analysis)
 ```
+
+**Mode selection precedence**: query param `?mode=` > JSON body `{"mode": ""}` > `SYNC_MODE` env var > default `survey123`
 
 ## Files
 
-- **`main.py`**: Core Cloud Function with authentication and orchestration
-- **`chemical_processor.py`**: Adapted chemical data processing logic
+- **`main.py`**: Entry point. Routes to Survey123 or FeatureServer sync based on mode
+- **`chemical_processor.py`**: Chemical value processing, status classification, site reclassification, and idempotent DB insertion with `sample_id` support
 - **`requirements.txt`**: Python dependencies
-- **`deploy.sh`**: Automated deployment script
+- **`deploy.sh`**: Automated deployment script (bundles shared project modules)
 - **`README.md`**: This documentation
+
+See `docs/cloud/DEPLOYMENT.md` for full deployment details, environment variables, and sync flow documentation.
 
 ## Setup Instructions
 
@@ -107,18 +113,47 @@ gsutil cp database/blue_thumb.db gs://blue-thumb-database/
 |----------|-------------|----------|
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID | Yes (auto-set) |
 | `GCS_BUCKET_DATABASE` | Cloud Storage bucket for database | Yes |
-| `ARCGIS_CLIENT_ID` | ArcGIS service account client ID | Yes |
-| `ARCGIS_CLIENT_SECRET` | ArcGIS service account secret | Yes |
-| `SURVEY123_FORM_ID` | Survey123 form identifier | Yes |
+| `ARCGIS_CLIENT_ID` | ArcGIS service account client ID | Survey123 mode only |
+| `ARCGIS_CLIENT_SECRET` | ArcGIS service account secret | Survey123 mode only |
+| `SURVEY123_FORM_ID` | Survey123 form identifier | Survey123 mode only |
+| `SYNC_MODE` | Default sync mode (`survey123` or `feature_server`) | No (default: `survey123`) |
+| `GCS_DB_BLOB_NAME` | Blob name in bucket | No (default: `blue_thumb.db`) |
+
+## Sync Modes
+
+### Survey123 Mode (default)
+Fetches new submissions from a private Survey123 form via OAuth2 authentication. Uses the ArcGIS REST API with client credentials.
+
+### FeatureServer Mode
+Fetches QAQC-verified records from a public ArcGIS FeatureServer endpoint. No authentication required. Uses an adaptive sync strategy:
+
+1. **First run** (no prior sync metadata): Fetches by sampling date (`day` field) from the DB's latest chemical date
+2. **Subsequent runs**: Fetches by `EditDate` timestamp from the last successful sync, catching both new records and edits
+
+Sync metadata stored at `sync_metadata/last_feature_server_sync.json` in GCS. Uses `sample_id` (ArcGIS `objectid`) for idempotent insertion — re-syncing the same records won't create duplicates.
+
+**Trigger FeatureServer mode:**
+```bash
+# Via query parameter
+curl -X POST "$FUNCTION_URL?mode=feature_server"
+
+# Via JSON body
+curl -X POST "$FUNCTION_URL" -H "Content-Type: application/json" -d '{"mode": "feature_server"}'
+
+# Via environment variable (set as default)
+SYNC_MODE=feature_server
+```
 
 ## Data Processing Flow
 
-### 1. Authentication
+### 1. Authentication (Survey123 mode only)
 - Obtains ArcGIS access token using service account credentials
 - Handles token refresh automatically
+- FeatureServer mode requires no authentication (public endpoint)
 
 ### 2. Data Fetching
-- Queries Survey123 API for submissions since last sync
+- **Survey123**: Queries Survey123 API for submissions since last sync
+- **FeatureServer**: Queries public FeatureServer for records since last sync (date-based or EditDate-based)
 - Converts ArcGIS feature data to pandas DataFrame
 
 ### 3. Chemical Processing
@@ -252,11 +287,11 @@ gcloud scheduler jobs describe survey123-daily-sync --location=us-central1
 
 ### Common Issues
 
-1. **ArcGIS Authentication Failed**
+1. **ArcGIS Authentication Failed** (Survey123 mode)
    - Verify `ARCGIS_CLIENT_ID` and `ARCGIS_CLIENT_SECRET`
    - Check service account permissions in ArcGIS
 
-2. **Survey123 Form Not Found**
+2. **Survey123 Form Not Found** (Survey123 mode)
    - Verify `SURVEY123_FORM_ID` is correct
    - Ensure form is published and accessible
 
@@ -265,8 +300,14 @@ gcloud scheduler jobs describe survey123-daily-sync --location=us-central1
    - Verify database file exists in bucket
 
 4. **No Data Processed**
-   - Check if there are new Survey123 submissions
+   - Check if there are new submissions/records since last sync
    - Verify date range logic (last sync timestamp)
+   - For FeatureServer: check `sync_metadata/last_feature_server_sync.json` in GCS
+
+5. **FeatureServer Sync Issues**
+   - Verify the FeatureServer endpoint is accessible (public, no auth needed)
+   - Check if sync metadata file exists in GCS (first run uses date-based fallback)
+   - Look for field mapping errors in logs (FeatureServer field names differ from CSV columns)
 
 ### Debug Mode
 
@@ -292,7 +333,6 @@ gcloud functions deploy survey123-daily-sync \
 - **Dashboard integration** for sync status monitoring
 - **Multi-form support** for different survey types
 - **Data validation rules** specific to site conditions
-- ✅ **Active/Historic site reclassification** - **IMPLEMENTED**: Sites are automatically reclassified after each sync
 
 ## Support
 

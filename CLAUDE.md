@@ -29,7 +29,7 @@ visualizations/                 # Plotly chart generation and map queries
 cloud_functions/survey123_sync/ # Daily data sync Cloud Function
 text/                           # Markdown content for educational tabs
 data/{raw,interim,processed}/   # CSV pipeline stages (raw → interim → processed)
-tests/                          # 51 test files mirroring source structure
+tests/                          # 40 test files mirroring source structure
 ```
 
 ## Key Conventions
@@ -38,7 +38,7 @@ tests/                          # 51 test files mirroring source structure
 - **Component IDs**: kebab-case, prefixed by tab (`chemical-site-dropdown`, `bio-tab-state`)
 - **Database**: Always use parameterized queries (`?`). Foreign keys enforced. Connection pattern: `get_connection()` → try/finally → `close_connection()`
 - **BDL handling**: Zero = below detection limit (replaced with threshold). NaN = data gap (preserved)
-- **Callbacks**: All use `prevent_initial_call=True`. Registered centrally in `callbacks/__init__.py`
+- **Callbacks**: Convention is `prevent_initial_call=True`. Registered centrally in `callbacks/__init__.py`
 - **State**: `dcc.Store` for session persistence. Priority: saved state > navigation state > defaults
 - **Three chemical data pathways**: `chemical_processing.py` (original single-value CSV), `updated_chemical_processing.py` (multi-range Low/Mid/High CSV), and `arcgis_sync.py` (real-time FeatureServer). All share `chemical_utils.py`
 
@@ -47,7 +47,7 @@ tests/                          # 51 test files mirroring source structure
 - **`updated_chemical_processing.py` is NOT a newer version of `chemical_processing.py`** — they handle different data formats from different collection periods. Both are active. `arcgis_sync.py` is a third pathway that fetches from the FeatureServer and feeds into the same pipeline as `updated_chemical_processing.py`.
 - **Sites must exist before loading any data type** — all processing tables have foreign keys to `sites`. Run site pipeline first.
 - **`data/raw/` is read-only** — never modify raw CSVs. Cleaned versions go to `data/interim/`.
-- **`data_queries.py` is the only retrieval interface** — callbacks and visualizations should never query the DB directly. All reads go through this module.
+- **`data_queries.py` is the primary retrieval interface** — callbacks and visualizations should query through this module. Exception: `map_queries.py` has direct DB access for map-specific queries.
 - **Duplicate handling differs by data type** — chemical preserves all records, habitat averages same-date duplicates, fish uses BT field work records to distinguish replicates from errors. See `docs/decisions/` for rationale.
 - **Soluble nitrogen is calculated, not measured** — it's the sum of Nitrate + Nitrite + Ammonia, computed during chemical processing.
 
@@ -67,7 +67,7 @@ tests/                          # 51 test files mirroring source structure
 ```bash
 pytest                          # Full suite
 pytest tests/data_processing/   # By module
-pytest -m unit                  # By marker (unit, integration, slow)
+pytest -m unit                  # By marker (defined but not yet applied to tests)
 ```
 
 See `docs/testing/TESTING_GUIDE.md` for full details.
@@ -80,5 +80,5 @@ See `docs/testing/TESTING_GUIDE.md` for full details.
 | `docs/architecture/DATABASE_SCHEMA.md` | Table relationships, indexes, connection patterns |
 | `docs/architecture/DASHBOARD.md` | Callbacks, state management, visualization flow, chatbot integration |
 | `docs/testing/TESTING_GUIDE.md` | Running tests, organization, fixtures, adding new tests |
-| `docs/cloud/DEPLOYMENT.md` | Docker, Cloud Build, Cloud Functions, env vars |
+| `docs/cloud/DEPLOYMENT.md` | Docker, Cloud Run, Cloud Functions, env vars |
 | `docs/decisions/` | Historical design decisions (duplicate handling, site processing, validation) |
