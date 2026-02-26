@@ -93,9 +93,8 @@ Consolidate sites from multiple raw CSV files into a single master sites list wi
 Identify and merge sites that represent the same physical location but have different names in the database.
 
 ### Duplicate Detection Logic
-- **Method**: Boundary-safe Haversine clustering (default). Coordinates are floor-binned at 0.001° resolution, then each site is compared against its bin and 8 neighboring bins using Haversine distance (50m default threshold). Union-find provides transitive clustering.
+- **Method**: Haversine distance clustering. Coordinates are floor-binned at 0.001° resolution, then each site is compared against its bin and 8 neighboring bins using Haversine distance (50m default threshold). Union-find provides transitive clustering.
 - **Grouping**: Sites within the distance threshold are clustered transitively — if A is near B and B is near C, all three form one group.
-- **Legacy mode**: `boundary_safe=False` falls back to strict `ROUND(latitude, 3)` / `ROUND(longitude, 3)` bin matching, which can miss near-duplicates on rounding boundaries.
 - **Analysis**: Preview mode shows what would be merged without making changes
 
 ### Site Selection Priority

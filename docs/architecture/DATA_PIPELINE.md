@@ -39,7 +39,7 @@ The Cloud Function orchestrates this via `mode=feature_server` (see Deployment d
 | `data_loader.py` | CSV loading, site name cleaning, BDL string conversion, fuzzy site matching (85% threshold) |
 | `consolidate_sites.py` | Phase 1: clean raw CSVs → interim/. Phase 2: merge all sites with priority-based metadata resolution |
 | `site_processing.py` | Insert/update sites in DB, classify active vs historic (active = chemical reading within 1 year of most recent) |
-| `merge_sites.py` | Find coordinate duplicates via boundary-safe Haversine clustering (50m default threshold, floor-bin + neighbor-bin expansion, union-find transitive grouping). Merge to preferred site, reassign all monitoring data. Legacy rounding mode available via `boundary_safe=False` |
+| `merge_sites.py` | Find coordinate duplicates via Haversine distance clustering (50m default threshold, floor-bin + neighbor-bin expansion, union-find transitive grouping). Merge to preferred site, reassign all monitoring data |
 | `chemical_processing.py` | Process `cleaned_chemical_data.csv` — standard single-value chemical measurements |
 | `updated_chemical_processing.py` | Process `cleaned_updated_chemical_data.csv` — newer multi-range format (Low/Mid/High) |
 | `chemical_utils.py` | Shared chemical constants, validation, BDL conversion, status determination, DB insertion. Supports `sample_id`-based idempotent event insertion |
@@ -74,8 +74,6 @@ Sites with nearly identical coordinates are merged in step 3 of the pipeline (`m
    - Sites present in `chemical_data` source file
    - Longest site name (fallback)
 5. **Merge**: All monitoring data (chemical, fish, macro, habitat) is reassigned from duplicate sites to the preferred site, then duplicates are deleted. Cleaned interim CSVs are updated with the new site name mappings.
-
-A legacy rounding mode (`boundary_safe=False`) groups by identical `ROUND(latitude, 3)` / `ROUND(longitude, 3)` bins but can miss near-duplicates on rounding boundaries. See `docs/RFC_PIPELINE_HARDENING_VALIDATION.md` for the design rationale.
 
 ## Shared Conventions
 
