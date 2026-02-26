@@ -146,11 +146,11 @@ class TestDatabaseManager(unittest.TestCase):
         
         self.mock_bucket.blob.return_value = mock_metadata_blob
         
-        result = self.db_manager.get_last_sync_timestamp()
-        
+        result = self.db_manager.get_last_sync_timestamp('sync_metadata/last_feature_server_sync.json')
+
         # Should return parsed timestamp
         self.assertEqual(result, test_timestamp)
-        self.mock_bucket.blob.assert_called_with('sync_metadata/last_sync.json')
+        self.mock_bucket.blob.assert_called_with('sync_metadata/last_feature_server_sync.json')
     
     def test_get_last_sync_timestamp_not_exists(self):
         """Test getting last sync timestamp when metadata doesn't exist."""
@@ -160,22 +160,22 @@ class TestDatabaseManager(unittest.TestCase):
         
         self.mock_bucket.blob.return_value = mock_metadata_blob
         
-        result = self.db_manager.get_last_sync_timestamp()
-        
+        result = self.db_manager.get_last_sync_timestamp('sync_metadata/last_feature_server_sync.json')
+
         # Should return default timestamp (7 days ago)
         expected_cutoff = datetime.now() - timedelta(days=7)
         self.assertAlmostEqual(result, expected_cutoff, delta=timedelta(seconds=10))
-    
+
     def test_get_last_sync_timestamp_error(self):
         """Test handling of errors when reading sync timestamp."""
         # Mock metadata blob exists but has invalid JSON
         mock_metadata_blob = MagicMock()
         mock_metadata_blob.exists.return_value = True
         mock_metadata_blob.download_as_string.return_value = "invalid json"
-        
+
         self.mock_bucket.blob.return_value = mock_metadata_blob
-        
-        result = self.db_manager.get_last_sync_timestamp()
+
+        result = self.db_manager.get_last_sync_timestamp('sync_metadata/last_feature_server_sync.json')
         
         # Should return default timestamp on error
         expected_cutoff = datetime.now() - timedelta(days=7)
@@ -189,11 +189,11 @@ class TestDatabaseManager(unittest.TestCase):
         mock_metadata_blob = MagicMock()
         self.mock_bucket.blob.return_value = mock_metadata_blob
         
-        result = self.db_manager.update_sync_timestamp(test_timestamp)
-        
+        result = self.db_manager.update_sync_timestamp(test_timestamp, metadata_blob_name='sync_metadata/last_feature_server_sync.json')
+
         # Verify success
         self.assertTrue(result)
-        
+
         # Verify metadata was uploaded
         expected_metadata = {
             'last_sync_timestamp': test_timestamp.isoformat(),
@@ -202,7 +202,7 @@ class TestDatabaseManager(unittest.TestCase):
         mock_metadata_blob.upload_from_string.assert_called_once_with(
             json.dumps(expected_metadata)
         )
-        self.mock_bucket.blob.assert_called_with('sync_metadata/last_sync.json')
+        self.mock_bucket.blob.assert_called_with('sync_metadata/last_feature_server_sync.json')
     
     def test_update_sync_timestamp_error(self):
         """Test handling of errors when updating sync timestamp."""
@@ -213,8 +213,8 @@ class TestDatabaseManager(unittest.TestCase):
         mock_metadata_blob.upload_from_string.side_effect = Exception("Upload failed")
         self.mock_bucket.blob.return_value = mock_metadata_blob
         
-        result = self.db_manager.update_sync_timestamp(test_timestamp)
-        
+        result = self.db_manager.update_sync_timestamp(test_timestamp, metadata_blob_name='sync_metadata/last_feature_server_sync.json')
+
         # Should return False on error
         self.assertFalse(result)
     
