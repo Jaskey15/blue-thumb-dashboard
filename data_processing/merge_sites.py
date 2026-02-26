@@ -155,45 +155,34 @@ def find_duplicate_coordinate_groups(conn=None, distance_threshold_m=50.0):
         if should_close:
             close_connection(conn)
 
-def analyze_coordinate_duplicates(boundary_safe=True, distance_threshold_m=50.0, scale=1000):
+def analyze_coordinate_duplicates(distance_threshold_m=50.0):
     """Analyze duplicate groups without mutating the database.
 
-    This is a read-only preview mode that:
-    - Detects duplicate groups using `find_duplicate_coordinate_groups(...)`.
-    - Applies `determine_preferred_site(...)` to each group to predict which site
-      would be kept and why.
+    Read-only preview that detects duplicate groups and predicts which site
+    would be kept by the merge process.
 
     Args:
-        boundary_safe: If True, analyze distance-based clusters (see
-            `find_duplicate_coordinate_groups`). If False, analyze strict
-            3-decimal-rounded coordinate bins.
-        distance_threshold_m: Distance threshold (meters) for boundary-safe clustering.
-        scale: Bin scaling factor for boundary-safe candidate generation.
+        distance_threshold_m: Distance threshold in meters for clustering.
 
     Returns:
-        A dictionary with summary statistics, including per-group site lists and
-        a predicted keep decision.
-        - In rounding mode, group identifiers are reported as `(rounded_lat, rounded_lon)`.
-        - In boundary-safe mode, group identifiers are reported as `(group_id=<n>)`.
-        Returns `None` on unexpected errors.
+        A dictionary with summary statistics and per-group site lists.
+        Returns None on unexpected errors.
     """
     logger.info("Analyzing coordinate duplicates...")
-    
+
     try:
         site_data_df, updated_chemical_df, chemical_data_df = load_csv_files()
-        
+
         updated_chemical_sites = set(updated_chemical_df['Site Name'].apply(clean_site_name))
         chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
-        
+
         conn = get_connection()
         duplicate_groups_df = find_duplicate_coordinate_groups(
             conn,
-            boundary_safe=boundary_safe,
             distance_threshold_m=distance_threshold_m,
-            scale=scale,
         )
         close_connection(conn)
-        
+
         if duplicate_groups_df.empty:
             logger.info("No coordinate duplicate sites found")
             return {
@@ -201,29 +190,21 @@ def analyze_coordinate_duplicates(boundary_safe=True, distance_threshold_m=50.0,
                 'duplicate_groups': 0,
                 'examples': []
             }
-        
+
         duplicate_groups_summary = []
         total_duplicate_sites = len(duplicate_groups_df)
         group_count = 0
 
-        groupby_cols = ['group_id'] if boundary_safe else ['rounded_lat', 'rounded_lon']
-        
-        # Process each group to determine which site would be kept.
-        for group_key, group in duplicate_groups_df.groupby(groupby_cols):
+        for group_key, group in duplicate_groups_df.groupby('group_id'):
             group_count += 1
             sites_in_group = list(group['site_name'])
-            
-            # Apply the same logic as the merge to predict the outcome.
+
             preferred_site, _, reason = determine_preferred_site(
                 group, updated_chemical_sites, chemical_data_sites
             )
 
-            if boundary_safe:
-                coordinates = f"(group_id={group_key})"
-            else:
-                rounded_lat, rounded_lon = group_key
-                coordinates = f"({rounded_lat}, {rounded_lon})"
-            
+            coordinates = f"(group_id={group_key})"
+
             group_info = {
                 'coordinates': coordinates,
                 'site_count': len(group),
@@ -231,20 +212,20 @@ def analyze_coordinate_duplicates(boundary_safe=True, distance_threshold_m=50.0,
                 'would_keep': preferred_site['site_name'],
                 'reason': reason
             }
-            
+
             duplicate_groups_summary.append(group_info)
-        
+
         logger.info(f"Found {total_duplicate_sites} duplicate sites in {group_count} coordinate groups")
         if total_duplicate_sites > group_count:
             logger.info(f"Would delete {total_duplicate_sites - group_count} duplicate sites")
-        
+
         return {
             'total_duplicate_sites': total_duplicate_sites,
             'duplicate_groups': group_count,
-            'examples': duplicate_groups_summary[:5],  # Provide first 5 for a sample.
+            'examples': duplicate_groups_summary[:5],
             'all_groups': duplicate_groups_summary
         }
-        
+
     except Exception as e:
         logger.error(f"Error analyzing coordinate duplicates: {e}")
         return None
