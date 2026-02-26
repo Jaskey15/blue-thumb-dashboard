@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Deploy Survey123 Sync Cloud Function
+# Deploy FeatureServer Sync Cloud Function
 # This script deploys the daily sync function to Google Cloud
+# TODO: Rename function from survey123-daily-sync to blue-thumb-data-sync
+# TODO: Rename cloud_functions/survey123_sync/ directory to cloud_functions/data_sync/
 
 set -e
 
@@ -17,7 +19,7 @@ MAX_INSTANCES="1"
 DATABASE_BUCKET="${GCS_BUCKET_DATABASE:-blue-thumb-database}"
 ENV_VARS="GCS_BUCKET_DATABASE=${DATABASE_BUCKET}"
 
-echo "Deploying Survey123 Daily Sync Cloud Function..."
+echo "Deploying FeatureServer Daily Sync Cloud Function..."
 echo "Function: $FUNCTION_NAME"
 echo "Region: $REGION"
 echo "Runtime: $RUNTIME"
@@ -69,16 +71,5 @@ echo "Function URL: $FUNCTION_URL"
 
 echo ""
 echo "Next steps:"
-echo "1. Set up environment variables for ArcGIS credentials:"
-echo "   - ARCGIS_CLIENT_ID"
-echo "   - ARCGIS_CLIENT_SECRET" 
-echo "   - SURVEY123_FORM_ID"
-echo ""
-echo "2. Create daily Cloud Scheduler job:"
-echo "   gcloud scheduler jobs create http survey123-daily-sync \\"
-echo "     --schedule=\"0 6 * * *\" \\"
-echo "     --uri=\"$FUNCTION_URL\" \\"
-echo "     --http-method=POST \\"
-echo "     --time-zone=\"America/Chicago\""
-echo ""
-echo "3. Upload your SQLite database to Cloud Storage bucket: blue-thumb-database" 
+echo "1. Verify the function URL is configured in Cloud Scheduler"
+echo "2. Ensure the SQLite database exists in Cloud Storage bucket: ${DATABASE_BUCKET}"
