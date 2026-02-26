@@ -84,8 +84,6 @@ class TestSiteManagement(unittest.TestCase):
         self.sample_sites_with_duplicates = pd.DataFrame({
             'site_id': [1, 2, 3, 4, 5],
             'site_name': ['Blue Creek Site A', 'Blue Creek Site B', 'Red River Main', 'Red River Alt', 'Unique Site'],
-            'rounded_lat': [35.123, 35.123, 34.567, 34.567, 33.999],
-            'rounded_lon': [-97.123, -97.123, -96.567, -96.567, -95.999],
             'latitude': [35.1234, 35.1235, 34.5678, 34.5679, 33.9999],
             'longitude': [-97.1234, -97.1235, -96.5678, -96.5679, -95.9999],
             'county': ['Cleveland', 'Cleveland', 'Murray', 'Murray', 'Bryan'],
@@ -439,8 +437,8 @@ class TestSiteManagement(unittest.TestCase):
             self.assertEqual(len(result), 4)
 
     @patch('data_processing.merge_sites.get_connection')
-    def test_find_duplicate_coordinate_groups_boundary_safe_detects_rounding_boundary(self, mock_get_connection):
-        """Test boundary-safe mode catches near-duplicates missed by ROUND(lat, 3) binning."""
+    def test_find_duplicate_coordinate_groups_detects_nearby_sites(self, mock_get_connection):
+        """Test Haversine clustering catches near-duplicates."""
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
 
@@ -448,8 +446,6 @@ class TestSiteManagement(unittest.TestCase):
         near_boundary_sites = pd.DataFrame({
             'site_id': [1, 2],
             'site_name': ['Site_A (Upstream)', 'Site_A (Downstream)'],
-            'rounded_lat': [35.124, 35.123],
-            'rounded_lon': [-97.5, -97.5],
             'latitude': [35.123501, 35.123499],
             'longitude': [-97.5, -97.5],
             'county': [None, None],
@@ -460,27 +456,20 @@ class TestSiteManagement(unittest.TestCase):
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = near_boundary_sites
 
-            # Rounding mode misses boundary duplicates
-            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
-            self.assertTrue(result_rounding.empty)
-
-            # Default (boundary-safe) catches them
             result_default = find_duplicate_coordinate_groups()
             self.assertEqual(len(result_default), 2)
             self.assertIn('group_id', result_default.columns)
             self.assertEqual(len(result_default['group_id'].unique()), 1)
 
     @patch('data_processing.merge_sites.get_connection')
-    def test_find_duplicate_coordinate_groups_boundary_safe_respects_threshold(self, mock_get_connection):
-        """Test boundary-safe mode does not create clusters when points exceed threshold."""
+    def test_find_duplicate_coordinate_groups_respects_threshold(self, mock_get_connection):
+        """Test Haversine clustering does not create clusters when points exceed threshold."""
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
 
         far_sites = pd.DataFrame({
             'site_id': [1, 2],
             'site_name': ['Site_Far_A', 'Site_Far_B'],
-            'rounded_lat': [35.124, 35.123],
-            'rounded_lon': [-97.5, -97.5],
             'latitude': [35.123501, 35.124000],
             'longitude': [-97.5, -97.5],
             'county': [None, None],
@@ -490,21 +479,19 @@ class TestSiteManagement(unittest.TestCase):
 
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = far_sites
-            result_boundary_safe = find_duplicate_coordinate_groups(boundary_safe=True, distance_threshold_m=10.0)
-            self.assertTrue(result_boundary_safe.empty)
-            self.assertIn('group_id', result_boundary_safe.columns)
+            result = find_duplicate_coordinate_groups(distance_threshold_m=10.0)
+            self.assertTrue(result.empty)
+            self.assertIn('group_id', result.columns)
 
     @patch('data_processing.merge_sites.get_connection')
-    def test_find_duplicate_coordinate_groups_boundary_safe_transitive_closure(self, mock_get_connection):
-        """Test boundary-safe clusters are transitive (A~B and B~C implies A,B,C grouped)."""
+    def test_find_duplicate_coordinate_groups_transitive_closure(self, mock_get_connection):
+        """Test clusters are transitive (A~B and B~C implies A,B,C grouped)."""
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
 
         chain_sites = pd.DataFrame({
             'site_id': [1, 2, 3],
             'site_name': ['Site_Chain_A', 'Site_Chain_B', 'Site_Chain_C'],
-            'rounded_lat': [35.123, 35.124, 35.125],
-            'rounded_lon': [-97.5, -97.5, -97.5],
             'latitude': [35.123000, 35.123100, 35.123200],
             'longitude': [-97.5, -97.5, -97.5],
             'county': [None, None, None],
@@ -515,26 +502,19 @@ class TestSiteManagement(unittest.TestCase):
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = chain_sites
 
-            # Rounding mode misses chain duplicates
-            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
-            self.assertTrue(result_rounding.empty)
-
-            # Default (boundary-safe) with custom threshold catches the chain
             result_default = find_duplicate_coordinate_groups(distance_threshold_m=15.0)
             self.assertEqual(len(result_default), 3)
             self.assertEqual(len(result_default['group_id'].unique()), 1)
 
     @patch('data_processing.merge_sites.get_connection')
-    def test_find_duplicate_coordinate_groups_boundary_safe_negative_longitude_bins(self, mock_get_connection):
-        """Test boundary-safe detection works with negative longitude floor-bin boundaries."""
+    def test_find_duplicate_coordinate_groups_negative_longitude_bins(self, mock_get_connection):
+        """Test detection works with negative longitude floor-bin boundaries."""
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
 
         negative_lon_sites = pd.DataFrame({
             'site_id': [1, 2],
             'site_name': ['NegLon_A', 'NegLon_B'],
-            'rounded_lat': [35.124, 35.123],
-            'rounded_lon': [-97.5, -97.5],
             'latitude': [35.123501, 35.123499],
             'longitude': [-97.500001, -97.499999],
             'county': [None, None],
@@ -544,11 +524,7 @@ class TestSiteManagement(unittest.TestCase):
 
         with patch('data_processing.merge_sites.pd.read_sql_query') as mock_read_sql:
             mock_read_sql.return_value = negative_lon_sites
-            # Rounding mode misses negative-longitude boundary duplicates
-            result_rounding = find_duplicate_coordinate_groups(boundary_safe=False)
-            self.assertTrue(result_rounding.empty)
 
-            # Default (boundary-safe) catches them
             result_default = find_duplicate_coordinate_groups()
             self.assertEqual(len(result_default), 2)
             self.assertEqual(len(result_default['group_id'].unique()), 1)
@@ -556,7 +532,7 @@ class TestSiteManagement(unittest.TestCase):
     def test_determine_preferred_site_updated_chemical_priority(self):
         """Test site selection prioritizes updated_chemical_data sites."""
         group = self.sample_sites_with_duplicates[
-            self.sample_sites_with_duplicates['rounded_lat'] == 35.123
+            self.sample_sites_with_duplicates['site_id'].isin([1, 2])
         ].copy()
         
         preferred_site, sites_to_merge, reason = determine_preferred_site(
@@ -571,7 +547,7 @@ class TestSiteManagement(unittest.TestCase):
     def test_determine_preferred_site_chemical_data_priority(self):
         """Test site selection falls back to chemical_data sites."""
         group = self.sample_sites_with_duplicates[
-            self.sample_sites_with_duplicates['rounded_lat'] == 34.567
+            self.sample_sites_with_duplicates['site_id'].isin([3, 4])
         ].copy()
         
         preferred_site, sites_to_merge, reason = determine_preferred_site(
@@ -660,14 +636,14 @@ class TestSiteManagement(unittest.TestCase):
     @patch('data_processing.merge_sites.get_connection')
     @patch('data_processing.merge_sites.find_duplicate_coordinate_groups')
     @patch('data_processing.merge_sites.load_csv_files')
-    def test_analyze_coordinate_duplicates_boundary_safe_with_data(
+    def test_analyze_coordinate_duplicates_with_group_labels(
         self,
         mock_load_csv,
         mock_find_dupes,
         mock_get_connection,
         mock_close_connection,
     ):
-        """Test analyzing boundary-safe clusters reports groups and uses group_id labels."""
+        """Test analyzing clusters reports groups and uses group_id labels."""
         mock_load_csv.return_value = (
             pd.DataFrame({'SiteName': ['Site A', 'Site B']}),
             pd.DataFrame({'Site Name': ['Site_A (Upstream)']}),
@@ -677,8 +653,6 @@ class TestSiteManagement(unittest.TestCase):
         df = pd.DataFrame({
             'site_id': [1, 2],
             'site_name': ['Site_A (Upstream)', 'Site_A (Downstream)'],
-            'rounded_lat': [35.124, 35.123],
-            'rounded_lon': [-97.5, -97.5],
             'latitude': [35.123501, 35.123499],
             'longitude': [-97.5, -97.5],
             'county': [None, None],
@@ -691,7 +665,7 @@ class TestSiteManagement(unittest.TestCase):
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
 
-        result = analyze_coordinate_duplicates(boundary_safe=True)
+        result = analyze_coordinate_duplicates()
 
         self.assertIsNotNone(result)
         self.assertEqual(result['total_duplicate_sites'], 2)
@@ -704,7 +678,7 @@ class TestSiteManagement(unittest.TestCase):
     @patch('data_processing.merge_sites.find_duplicate_coordinate_groups')
     @patch('data_processing.merge_sites.load_csv_files')
     @patch('data_processing.merge_sites.get_connection')
-    def test_merge_duplicate_sites_boundary_safe_merges_one_group(
+    def test_merge_duplicate_sites_merges_one_group(
         self,
         mock_get_connection,
         mock_load_csv,
@@ -713,7 +687,7 @@ class TestSiteManagement(unittest.TestCase):
         mock_update_site_metadata,
         mock_update_csv,
     ):
-        """Test merge_duplicate_sites boundary_safe groups by group_id and deletes extras."""
+        """Test merge_duplicate_sites groups by group_id and deletes extras."""
         mock_load_csv.return_value = (
             pd.DataFrame({'SiteName': ['Site A']}),
             pd.DataFrame({'Site Name': ['Site_Keep']}),
@@ -723,8 +697,6 @@ class TestSiteManagement(unittest.TestCase):
         df = pd.DataFrame({
             'site_id': [1, 2],
             'site_name': ['Site_Keep', 'Site_Delete'],
-            'rounded_lat': [35.124, 35.123],
-            'rounded_lon': [-97.5, -97.5],
             'latitude': [35.123501, 35.123499],
             'longitude': [-97.5, -97.5],
             'county': [None, None],
@@ -750,7 +722,7 @@ class TestSiteManagement(unittest.TestCase):
         }
         mock_update_site_metadata.return_value = True
 
-        result = merge_duplicate_sites(boundary_safe=True)
+        result = merge_duplicate_sites()
 
         self.assertEqual(result['groups_processed'], 1)
         self.assertEqual(result['sites_deleted'], 1)
