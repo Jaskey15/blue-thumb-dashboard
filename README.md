@@ -18,7 +18,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Cloud Functions** - Serverless data processing and synchronization
 - **Cloud Storage** - Database hosting with automated backups
 - **Cloud Scheduler** - Automated daily data updates
-- **ArcGIS API** - Survey123 integration for real-time data collection
+- **ArcGIS API** - FeatureServer REST API for automated data sync
 
 ## Key Features
 
@@ -35,8 +35,8 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Interactive Chat**: Available on every tab with persistent conversation history
 
 ### Cloud-Powered Data Pipeline
-- **Dual Sync Modes**: Survey123 authenticated API and public ArcGIS FeatureServer
-- **Real-Time FeatureServer Sync**: Incremental sync via EditDate watermarks with idempotent insertion
+- **Automated FeatureServer Sync**: Daily sync from public ArcGIS REST API with idempotent insertion
+- **Incremental Sync**: EditDate watermarks for efficient delta fetches
 - **Live Database Refresh**: Cloud Run automatically detects and downloads updated databases from GCS
 - **Smart Data Processing**: Handles range-based measurements and validation
 - **Backup Management**: Automatic database backups before each update
@@ -68,8 +68,8 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 ├── app.py                
 ├── requirements.txt       
 ├── cloud_functions/
-│   └── survey123_sync/    # Automated data synchronization (Survey123 + FeatureServer modes)
-│       ├── main.py        # Dual-mode entry point
+│   └── survey123_sync/    # Automated FeatureServer data sync
+│       ├── main.py        # Cloud Function entry point
 │       ├── chemical_processor.py
 │       ├── deploy.sh      # Stages shared modules for deployment
 │       └── requirements.txt
@@ -154,7 +154,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 
 ### Data Processing Pipeline
 - **ETL Architecture**: Comprehensive processes for multiple data types across 370+ sites
-- **Dual Real-time Integration**: Survey123 API and public ArcGIS FeatureServer sync with idempotent insertion
+- **Real-time Integration**: Public ArcGIS FeatureServer sync with idempotent insertion
 - **Data Validation**: Duplicate detection, QAQC gating, and quality assurance
 - **Scalable Design**: Cloud-native architecture with live database refresh on Cloud Run
 

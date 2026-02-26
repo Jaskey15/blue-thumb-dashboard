@@ -26,7 +26,7 @@ callbacks/                      # Dash callbacks — see docs/architecture/DASHB
 layouts/tabs/                   # Tab layout components (overview, chemical, biological, habitat, etc.)
 layouts/components/chatbot.py   # Floating AI chatbot component
 visualizations/                 # Plotly chart generation and map queries
-cloud_functions/survey123_sync/ # Daily data sync Cloud Function
+cloud_functions/survey123_sync/ # Daily FeatureServer data sync Cloud Function
 text/                           # Markdown content for educational tabs
 data/{raw,interim,processed}/   # CSV pipeline stages (raw → interim → processed)
 tests/                          # 51 test files mirroring source structure
