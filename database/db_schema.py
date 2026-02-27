@@ -207,7 +207,7 @@ def create_tables():
         season TEXT CHECK (season IN ('Summer', 'Winter')),
         year INTEGER NOT NULL,
         habitat TEXT CHECK (habitat IN ('Riffle', 'Vegetation', 'Woody')),
-        FOREIGN KEY (site_id) REFERENCES sites (site_id)
+        FOREIGN KEY (site_id) REFERENCES sites (site_id),
         UNIQUE(site_id, sample_id, habitat)
     )
     ''')

@@ -11,10 +11,10 @@ pytest tests/data_processing/
 pytest tests/callbacks/
 pytest tests/visualizations/
 
-# By marker
-pytest -m unit
-pytest -m integration
-pytest -m "not slow"
+# By marker (defined in pytest.ini but not yet applied to tests)
+# pytest -m unit
+# pytest -m integration
+# pytest -m "not slow"
 
 # Single file
 pytest tests/data_processing/test_chemical_processing.py
@@ -96,7 +96,7 @@ tests/
 └── test_utils.py           → Utility function tests
 ```
 
-**51 test files** across 8 test directories.
+**40 test files** across 8 test directories (796 tests total).
 
 ## Testing Philosophy
 
@@ -129,5 +129,5 @@ tests/
 1. Create test file in the matching `tests/<module>/` directory
 2. Name it `test_<module_name>.py`
 3. Use `Test*` classes for grouping related tests
-4. Apply markers (`@pytest.mark.unit`, `@pytest.mark.integration`) as appropriate
+4. Apply markers (`@pytest.mark.unit`, `@pytest.mark.integration`) as appropriate — markers are defined in `pytest.ini` but not yet applied to existing tests
 5. Use existing conftest fixtures for database and callback state

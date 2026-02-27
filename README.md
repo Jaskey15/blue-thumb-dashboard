@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project transforms complex water quality datasets from Oklahoma's Blue Thumb volunteer monitoring program into accessible, interactive visualizations that help communicate stream health across Oklahoma's watersheds. With data from **370+ monitoring sites**, the dashboard provides comprehensive statewide coverage enhanced by AI-powered assistance and automated cloud processing.
+This project transforms complex water quality datasets from Oklahoma's Blue Thumb volunteer monitoring program into accessible, interactive visualizations that help communicate stream health across Oklahoma's watersheds. With data from **370+ monitoring sites**, the dashboard provides comprehensive statewide coverage enhanced by automated cloud processing and AI-powered assistance.
 
 ## Technology Stack
 
@@ -14,11 +14,11 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Bootstrap** - Responsive UI components
 
 ### Google Cloud Integration
-- **Vertex AI (Gemini 2.0)** - AI-powered stream health chatbot with document grounding
 - **Cloud Functions** - Serverless data processing and synchronization
 - **Cloud Storage** - Database hosting with automated backups
 - **Cloud Scheduler** - Automated daily data updates
 - **ArcGIS API** - FeatureServer REST API for automated data sync
+- **Vertex AI** - AI-powered stream health chatbot with document grounding
 
 ## Key Features
 
@@ -28,19 +28,13 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - Active site filtering to focus on currently monitored locations
 - Click-to-navigate functionality for detailed site analysis
 
-### AI Stream Health Assistant
-- **Expert Knowledge**: Trained on Blue Thumb documentation and stream health science
-- **Context-Aware**: Provides tab-specific guidance and answers
-- **Multi-Source**: Combines grounded knowledge with real-time search capabilities
-- **Interactive Chat**: Available on every tab with persistent conversation history
-
 ### Cloud-Powered Data Pipeline
 - **Automated FeatureServer Sync**: Daily sync from public ArcGIS REST API with idempotent insertion
 - **Incremental Sync**: EditDate watermarks for efficient delta fetches
 - **Live Database Refresh**: Cloud Run automatically detects and downloads updated databases from GCS
 - **Smart Data Processing**: Handles range-based measurements and validation
 - **Backup Management**: Automatic database backups before each update
-- **Cost-Efficient**: <$5/month operational costs
+- **Cost-Efficient**: <$10/month operational costs
 
 ### Comprehensive Chemical Analysis
 - Time series visualization of key water quality parameters
@@ -61,6 +55,12 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - Habitat quality trends over monitoring periods
 - Component-level habitat metrics breakdown
 - Watershed-scale habitat comparisons
+
+### AI Stream Health Assistant
+- **Expert Knowledge**: Trained on Blue Thumb documentation and stream health science
+- **Context-Aware**: Provides tab-specific guidance and answers
+- **Multi-Source**: Combines grounded knowledge with real-time search capabilities
+- **Interactive Chat**: Available on every tab with persistent conversation history
 
 ## Project Structure
 
@@ -149,7 +149,6 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 7. **Open your browser**
    Navigate to http://127.0.0.1:8050
 
-
 ## Technical Highlights
 
 ### Data Processing Pipeline
@@ -175,7 +174,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **370+ Monitoring Sites**: Comprehensive statewide water quality coverage
 - **Multi-Parameter Analysis**: Chemical, biological, and habitat assessment integration
 - **Educational Outreach**: Public-facing dashboard promoting stream health awareness
-- **Automated Processing**: Daily data updates reducing manual intervention by 100%
+- **Automated Processing**: Daily data updates preventing need for manual intervention 
 - **AI Enhancement**: Intelligent assistance improving user engagement and understanding
 
 ## Future Enhancements

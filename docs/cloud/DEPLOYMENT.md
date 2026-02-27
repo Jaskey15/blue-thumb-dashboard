@@ -53,11 +53,11 @@ The trigger was configured through the Cloud Run console ("Set up continuous dep
 ```
 GOOGLE_CLOUD_PROJECT=blue-thumb-dashboard
 GCS_BUCKET_DATABASE=blue-thumb-database
-GCS_ASSET_BUCKET=blue-thumb-assets
 ```
 
 Optional:
 ```
+GCS_ASSET_BUCKET=blue-thumb-assets      # Falls back to local /assets if not set
 GCS_DB_BLOB_NAME=blue_thumb.db          # Blob name in bucket (default: blue_thumb.db)
 DB_REFRESH_INTERVAL_SECONDS=300         # How often to check GCS for DB updates (default: 300)
 ```

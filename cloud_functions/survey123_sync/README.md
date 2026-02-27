@@ -28,8 +28,10 @@ ArcGIS FeatureServer ➜ Cloud Function ➜ Cloud Storage ➜ Dashboard
 - **`main.py`**: Cloud Function entry point and orchestration
 - **`chemical_processor.py`**: Chemical data processing, status classification, and idempotent DB insertion
 - **`requirements.txt`**: Python dependencies
-- **`deploy.sh`**: Automated deployment script
+- **`deploy.sh`**: Automated deployment script (bundles shared project modules)
 - **`README.md`**: This documentation
+
+See `docs/cloud/DEPLOYMENT.md` for full deployment details, environment variables, and sync flow documentation.
 
 ## Setup Instructions
 
