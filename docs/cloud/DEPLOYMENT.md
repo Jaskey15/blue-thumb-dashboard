@@ -70,26 +70,17 @@ Cloud Run no longer relies solely on the Docker-baked database. On startup, `dat
 
 ## Cloud Function: Data Sync
 
-Located in `cloud_functions/survey123_sync/`. Supports two sync modes for fetching new chemical data and updating the database.
+Located in `cloud_functions/survey123_sync/`. Fetches new chemical data from the public ArcGIS FeatureServer and updates the database.
+
+> **Note:** The `survey123_sync` directory and function entry point names are legacy — retained for GCP config compatibility. TODO: Rename to `data_sync`.
 
 ### Components
-- **`main.py`** — Entry point. Routes to Survey123 or FeatureServer sync based on mode
+- **`main.py`** — Entry point. Calls FeatureServer sync directly
 - **`chemical_processor.py`** — Chemical value processing, status classification, site reclassification, and idempotent DB insertion with `sample_id` support
 
-### Sync Modes
+### Sync Strategy
 
-The Cloud Function supports two modes, selected via query param, JSON body, `SYNC_MODE` env var, or default (`survey123`):
-
-| Mode | Source | Auth | Use Case |
-|------|--------|------|----------|
-| `survey123` | Survey123 private API | OAuth2 (client credentials) | Original authenticated pathway |
-| `feature_server` | Public ArcGIS FeatureServer | None required | Real-time sync from public endpoint |
-
-**Mode precedence**: query param `?mode=` > JSON body `{"mode": ""}` > `SYNC_MODE` env var > default `survey123`
-
-### FeatureServer Sync Strategy
-
-The FeatureServer mode uses an adaptive sync strategy:
+The sync uses an adaptive strategy:
 
 1. **First run** (no prior FeatureServer sync metadata): Fetches by sampling date (`day` field) from the DB's latest chemical date
 2. **Subsequent runs**: Fetches by `EditDate` timestamp from the last successful sync, catching both new records and edits to existing ones
@@ -113,16 +104,8 @@ Deploy config: Python 3.12, 512MB memory, 540s timeout, us-central1, max 1 insta
 GCS_BUCKET_DATABASE=blue-thumb-database
 ```
 
-For Survey123 mode only:
-```
-ARCGIS_CLIENT_ID=<service-account-id>
-ARCGIS_CLIENT_SECRET=<service-account-secret>
-SURVEY123_FORM_ID=<form-id>
-```
-
 Optional:
 ```
-SYNC_MODE=feature_server    # Default sync mode (default: survey123)
 GCS_DB_BLOB_NAME=blue_thumb.db  # Blob name in bucket (default: blue_thumb.db)
 ```
 
@@ -138,19 +121,7 @@ gcloud scheduler jobs create http survey123-daily-sync \
   --time-zone="America/Chicago"
 ```
 
-### Sync Flow (Survey123 mode)
-
-1. Download database from Cloud Storage bucket
-2. Create backup of current database
-3. Authenticate with ArcGIS (OAuth2 with token refresh)
-4. Fetch new Survey123 submissions since last sync
-5. Process chemical data (range selection, status classification)
-6. Insert into local SQLite
-7. Reclassify sites as active/historic
-8. Upload updated database back to Cloud Storage
-9. Clean up temp DB file
-
-### Sync Flow (FeatureServer mode)
+### Sync Flow
 
 1. Download database from Cloud Storage to temp file
 2. Determine sync strategy (date-based or EditDate-based)
