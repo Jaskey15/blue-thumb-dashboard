@@ -158,6 +158,28 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
             if normalized and normalized not in normalized_site_lookup:
                 normalized_site_lookup[normalized] = db_site_id
 
+        def _resolve_site(name: Any, site_lookup: Dict[str, int], normalized_site_lookup: Dict[str, int], site_aliases: Dict[str, str]):
+            """Resolve site ID and canonical name using exact, normalized, and alias matching."""
+            resolved_name = name
+            site_id = site_lookup.get(name)
+            
+            if site_id is None:
+                normalized_key = _normalize_site_name(name).casefold()
+                site_id = normalized_site_lookup.get(normalized_key)
+
+                if site_id is None:
+                    canonical_name = site_aliases.get(normalized_key)
+                    if canonical_name:
+                        site_id = site_lookup.get(canonical_name)
+                        if site_id is None:
+                            site_id = normalized_site_lookup.get(
+                                _normalize_site_name(canonical_name).casefold()
+                            )
+                        if site_id is not None:
+                            resolved_name = canonical_name
+                            
+            return site_id, resolved_name
+
         site_aliases = {
             'cow creek: virginia avenue': 'Cow Creek: West Virginia Avenue',
             'cow creek: virginia ave': 'Cow Creek: West Virginia Avenue',
@@ -178,23 +200,13 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         
         for _, row in df.iterrows():
             site_name = row['Site_Name']
-
-            site_id = site_lookup.get(site_name)
-            if site_id is None:
-                normalized_key = _normalize_site_name(site_name).casefold()
-                site_id = normalized_site_lookup.get(normalized_key)
-
-            if site_id is None:
-                normalized_key = _normalize_site_name(site_name).casefold()
-                canonical_name = site_aliases.get(normalized_key)
-                if canonical_name:
-                    site_id = site_lookup.get(canonical_name)
-                    if site_id is None:
-                        site_id = normalized_site_lookup.get(
-                            _normalize_site_name(canonical_name).casefold()
-                        )
-                    if site_id is not None:
-                        site_name = canonical_name
+            
+            site_id, site_name = _resolve_site(
+                site_name, 
+                site_lookup, 
+                normalized_site_lookup, 
+                site_aliases
+            )
 
             if site_id is None:
                 site_name_str = str(site_name).strip()

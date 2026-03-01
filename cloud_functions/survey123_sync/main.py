@@ -283,18 +283,16 @@ def _get_feature_server_override(request):
         if hasattr(request, 'args') and request.args is not None:
             since_date = request.args.get('since_date')
             since_datetime = request.args.get('since_datetime')
-    except Exception:
-        since_date = since_date
-        since_datetime = since_datetime
+    except Exception as e:
+        logger.warning(f"Failed to parse override args (since_date/since_datetime): {e}")
 
     try:
         body = request.get_json(silent=True) if request is not None else None
         if isinstance(body, dict):
             since_date = since_date or body.get('since_date')
             since_datetime = since_datetime or body.get('since_datetime')
-    except Exception:
-        since_date = since_date
-        since_datetime = since_datetime
+    except Exception as e:
+        logger.warning(f"Failed to parse override body (since_date/since_datetime): {e}")
 
     return since_date, since_datetime
 
@@ -481,7 +479,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
 
     needs_backfill = bool(skipped_unknown_site_records)
     backfill_since_date = None
-    if sync_strategy in ('day', 'day_override', 'day_backfill'):
+    if sync_strategy in ('day', 'day_override'):
         backfill_since_date = sync_marker if needs_backfill else None
 
     watermark_timestamp = start_time
