@@ -64,6 +64,8 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
         conn = sqlite3.connect(path)
         cur = conn.cursor()
 
+        cur.execute("PRAGMA foreign_keys = ON")
+
         cur.execute(
             """
             CREATE TABLE sites (
@@ -89,7 +91,8 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 sample_id INTEGER,
                 collection_date TEXT,
                 year INTEGER,
-                month INTEGER
+                month INTEGER,
+                FOREIGN KEY (site_id) REFERENCES sites(site_id)
             )
             """
         )

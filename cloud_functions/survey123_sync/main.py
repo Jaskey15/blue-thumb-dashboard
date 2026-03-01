@@ -188,7 +188,7 @@ class DatabaseManager:
                     logger.error(
                         f"Error creating backup: gs://{bucket_name}/{backup_name} from gs://{bucket_name}/{db_object_name}: {e}"
                     )
-                    raise
+                    # Proceed with primary upload even if backup fails
             else:
                 logger.info(
                     f"No existing database object found at gs://{bucket_name}/{db_object_name}; skipping backup"
@@ -271,6 +271,15 @@ def _get_feature_server_override(request):
             since_datetime = since_datetime or body.get('since_datetime')
     except Exception as e:
         logger.warning(f"Failed to parse override body (since_date/since_datetime): {e}")
+
+    # Finding #6: Validate since_datetime_override properly to prevent downstream crashes
+    if since_datetime:
+        try:
+            # Test parse it to ensure it's valid ISO format
+            datetime.fromisoformat(str(since_datetime))
+        except ValueError as e:
+            logger.warning(f"Invalid since_datetime override '{since_datetime}', discarded: {e}")
+            since_datetime = None
 
     return since_date, since_datetime
 

@@ -24,8 +24,13 @@ if (
     sys.path.insert(0, _candidate_root)
 
 from data_processing.chemical_utils import (
+    SITE_ALIASES,
+    apply_bdl_conversions,
     determine_status,
     insert_collection_event,
+    normalize_site_name,
+    remove_empty_chemical_rows,
+    validate_chemical_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,15 +109,9 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         site_df = pd.read_sql_query(site_query, conn)
         site_lookup = dict(zip(site_df['site_name'], site_df['site_id']))
 
-        def _normalize_site_name(name: Any) -> str:
-            if name is None or pd.isna(name):
-                return ''
-            normalized = re.sub(r'\s+', ' ', str(name).strip())
-            return normalized.rstrip('.')
-
         normalized_site_lookup: Dict[str, int] = {}
         for db_site_name, db_site_id in site_lookup.items():
-            normalized = _normalize_site_name(db_site_name).casefold()
+            normalized = normalize_site_name(db_site_name).casefold()
             if normalized and normalized not in normalized_site_lookup:
                 normalized_site_lookup[normalized] = db_site_id
 
@@ -122,7 +121,7 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
             site_id = site_lookup.get(name)
             
             if site_id is None:
-                normalized_key = _normalize_site_name(name).casefold()
+                normalized_key = normalize_site_name(name).casefold()
                 site_id = normalized_site_lookup.get(normalized_key)
 
                 if site_id is None:
@@ -131,21 +130,12 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                         site_id = site_lookup.get(canonical_name)
                         if site_id is None:
                             site_id = normalized_site_lookup.get(
-                                _normalize_site_name(canonical_name).casefold()
+                                normalize_site_name(canonical_name).casefold()
                             )
                         if site_id is not None:
                             resolved_name = canonical_name
                             
             return site_id, resolved_name
-
-        site_aliases = {
-            'cow creek: virginia avenue': 'Cow Creek: West Virginia Avenue',
-            'cow creek: virginia ave': 'Cow Creek: West Virginia Avenue',
-            'blue beaver creek: cache rd': 'Blue Beaver Creek: Pecan Road',
-            'mooser creek: riverfield': 'Mooser Creek Trib: Riverfield School',
-            'deep fork river: canyon park': 'Deep Fork Tributary: Classen',
-            'tributary to arkansas river: walton': 'Unknown Trib to Arkansas River',
-        }
         
         records_inserted = 0
         skipped_records_unknown_sites = 0
@@ -163,7 +153,7 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                 site_name, 
                 site_lookup, 
                 normalized_site_lookup, 
-                site_aliases
+                SITE_ALIASES
             )
 
             if site_id is None:
@@ -171,6 +161,13 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                 unknown_sites.add(site_name_str)
                 skipped_records_unknown_sites += 1
                 unknown_site_counts[site_name_str] = unknown_site_counts.get(site_name_str, 0) + 1
+
+                # Finding #5: Check if this was an alias that failed to resolve
+                normalized_key = normalize_site_name(site_name).casefold()
+                if normalized_key in SITE_ALIASES:
+                    logger.warning(f"Alias mismatch: Site '{site_name}' matched alias '{SITE_ALIASES[normalized_key]}', but canonical name not found in database - skipping")
+                else:
+                    logger.warning(f"Site '{site_name}' not found in database - skipping")
 
                 if has_sample_id:
                     raw_sample_id = row.get('sample_id')
@@ -190,7 +187,6 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                                 existing.append(sample_id_int)
                             else:
                                 unknown_site_sample_ids_truncated = True
-                logger.warning(f"Site {site_name} not found in database - skipping")
                 continue
             date_str = row['Date'].strftime('%Y-%m-%d')
 
