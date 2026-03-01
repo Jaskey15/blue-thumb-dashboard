@@ -191,11 +191,8 @@ class TestOverviewTab(unittest.TestCase):
 class TestChemicalTab(unittest.TestCase):
     """Test chemical tab layout creation."""
     
-    @patch('layouts.tabs.chemical.get_chemical_date_range')
-    def test_create_chemical_tab(self, mock_date_range):
+    def test_create_chemical_tab(self):
         """Test chemical tab creation."""
-        # Mock date range function
-        mock_date_range.return_value = (2020, 2024)
         tab_wrapper = create_chemical_tab()
         tab_content = get_tab_content(tab_wrapper)
         
@@ -210,10 +207,8 @@ class TestChemicalTab(unittest.TestCase):
         children = safe_get_children(tab_content)
         self.assertGreater(len(children), 2)  # Download, description, site selection, controls
     
-    @patch('layouts.tabs.chemical.get_chemical_date_range')
-    def test_chemical_tab_site_dropdown(self, mock_date_range):
+    def test_chemical_tab_site_dropdown(self):
         """Test chemical tab site dropdown component."""
-        mock_date_range.return_value = (2020, 2024)
         tab_wrapper = create_chemical_tab()
         
         # Find the site dropdown
@@ -225,10 +220,8 @@ class TestChemicalTab(unittest.TestCase):
         self.assertTrue(site_dropdown.clearable)
         self.assertEqual(site_dropdown.placeholder, "Search for a site...")
     
-    @patch('layouts.tabs.chemical.get_chemical_date_range')
-    def test_chemical_tab_parameter_dropdown(self, mock_date_range):
+    def test_chemical_tab_parameter_dropdown(self):
         """Test chemical tab parameter dropdown component."""
-        mock_date_range.return_value = (2020, 2024)
         tab_wrapper = create_chemical_tab()
         
         # Find the parameter dropdown
@@ -454,14 +447,13 @@ class TestTabIntegration(unittest.TestCase):
     """Test tab integration and consistency."""
     
     @patch('layouts.tabs.overview.load_markdown_content')
-    @patch('layouts.tabs.chemical.get_chemical_date_range')
     @patch('layouts.tabs.habitat.load_markdown_content')
     @patch('layouts.tabs.habitat.create_image_with_caption')
     @patch('layouts.tabs.protect_streams.load_markdown_content')
     @patch('layouts.tabs.protect_streams.create_image_with_caption')
-    def test_all_tabs_return_valid_components(self, mock_protect_image, mock_protect_markdown, 
-                                               mock_habitat_image, mock_habitat_markdown, 
-                                               mock_chemical_date_range, mock_overview_markdown):
+    def test_all_tabs_return_valid_components(self, mock_protect_image, mock_protect_markdown,
+                                               mock_habitat_image, mock_habitat_markdown,
+                                               mock_overview_markdown):
         """Test that all tab creation functions return valid Dash components."""
         # Mock all dependencies
         mock_overview_markdown.return_value = html.Div("Mock content")
@@ -469,7 +461,6 @@ class TestTabIntegration(unittest.TestCase):
         mock_protect_markdown.return_value = html.Div("Mock content")
         mock_habitat_image.return_value = html.Img()
         mock_protect_image.return_value = html.Img()
-        mock_chemical_date_range.return_value = (2020, 2024)
         
         # Test all tab creation functions
         overview_tab = create_overview_tab()
@@ -500,10 +491,8 @@ class TestTabIntegration(unittest.TestCase):
         self.assertIn("tab-content-wrapper", biological_tab_content.className)
         self.assertIn("tab-content-wrapper", source_tab_content.className)
     
-    @patch('layouts.tabs.chemical.get_chemical_date_range')
-    def test_tab_download_components_consistency(self, mock_date_range):
+    def test_tab_download_components_consistency(self):
         """Test that tabs consistently include download components."""
-        mock_date_range.return_value = (2020, 2024)
         chemical_tab_wrapper = create_chemical_tab()
         biological_tab_wrapper = create_biological_tab()
         

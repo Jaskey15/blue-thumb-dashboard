@@ -290,8 +290,8 @@ def process_fetched_data(df):
     """
     Run translated DataFrame through the existing chemical processing pipeline.
 
-    This is the same sequence used by process_updated_chemical_data() and
-    process_survey123_chemical_data(), ensuring consistent results.
+    This is the same sequence used by process_updated_chemical_data(),
+    ensuring consistent results.
 
     Args:
         df: DataFrame with CSV-compatible column names.

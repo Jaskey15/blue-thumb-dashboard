@@ -13,6 +13,8 @@ The preferred site is determined using a priority system:
 
 import os
 
+import math
+
 import pandas as pd
 
 from data_processing import setup_logging
@@ -32,60 +34,155 @@ def load_csv_files():
     
     return site_data, updated_chemical, chemical_data
 
-def find_duplicate_coordinate_groups(conn=None):
-    """Finds groups of sites with identical coordinates, rounded to 3 decimal places."""
+def find_duplicate_coordinate_groups(conn=None, distance_threshold_m=50.0):
+    """Find candidate duplicate sites by Haversine distance clustering.
+
+    Uses a two-stage approach:
+      1) Candidate generation by binning coordinates into fixed floor bins:
+         lat_bin = floor(latitude * 1000), lon_bin = floor(longitude * 1000).
+         Bins correspond to ~0.001 degrees.
+      2) For each site, compares against sites in the same bin and the 8 neighboring
+         bins and computes Haversine distance. Pairs within distance_threshold_m are
+         unioned into clusters via union-find (transitive).
+
+    Args:
+        conn: Optional SQLite connection. If omitted, opens/closes its own.
+        distance_threshold_m: Distance threshold in meters for clustering (default 50.0).
+
+    Returns:
+        A pandas DataFrame of candidate duplicate sites with a group_id column
+        identifying each cluster. Empty DataFrame when no duplicates detected.
+    """
     if conn is None:
         conn = get_connection()
         should_close = True
     else:
         should_close = False
-    
+
     try:
         query = """
-        SELECT 
+        SELECT
             site_id,
             site_name,
-            ROUND(latitude, 3) as rounded_lat,
-            ROUND(longitude, 3) as rounded_lon,
             latitude,
             longitude,
             county,
             river_basin,
             ecoregion
-        FROM sites 
+        FROM sites
         WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-        ORDER BY rounded_lat, rounded_lon, site_name
+        ORDER BY site_name
         """
-        
+
         df = pd.read_sql_query(query, conn)
-        
-        # Group by rounded coordinates to identify sites at the same location.
-        duplicate_groups = df.groupby(['rounded_lat', 'rounded_lon']).filter(lambda x: len(x) > 1)
-        
-        return duplicate_groups
+        df = df.reset_index(drop=True)
+
+        scale = 1000
+        bin_to_indices = {}
+        lat_bins = [0] * len(df)
+        lon_bins = [0] * len(df)
+        for i, row in df.iterrows():
+            lat_bin = math.floor(row['latitude'] * scale)
+            lon_bin = math.floor(row['longitude'] * scale)
+            lat_bins[i] = lat_bin
+            lon_bins[i] = lon_bin
+            bin_to_indices.setdefault((lat_bin, lon_bin), []).append(i)
+
+        parent = list(range(len(df)))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra = find(a)
+            rb = find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        def haversine_m(lat1, lon1, lat2, lon2):
+            R = 6371000.0
+            phi1, phi2 = math.radians(lat1), math.radians(lat2)
+            dphi = math.radians(lat2 - lat1)
+            dlambda = math.radians(lon2 - lon1)
+            a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+            return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        for i, row in df.iterrows():
+            base = (lat_bins[i], lon_bins[i])
+            for dlat in (-1, 0, 1):
+                for dlon in (-1, 0, 1):
+                    nbr = (base[0] + dlat, base[1] + dlon)
+                    for j in bin_to_indices.get(nbr, []):
+                        if j <= i:
+                            continue
+                        dist = haversine_m(
+                            row['latitude'],
+                            row['longitude'],
+                            df.at[j, 'latitude'],
+                            df.at[j, 'longitude'],
+                        )
+                        if dist <= distance_threshold_m:
+                            union(i, j)
+
+        root_to_members = {}
+        for i in range(len(df)):
+            root = find(i)
+            root_to_members.setdefault(root, []).append(i)
+
+        dupe_groups = [members for members in root_to_members.values() if len(members) > 1]
+        if not dupe_groups:
+            empty = df.iloc[0:0].copy()
+            empty['group_id'] = pd.Series(dtype='int64')
+            return empty
+
+        idx_to_group_id = {}
+        out_indices = []
+        group_id = 0
+        for members in dupe_groups:
+            for idx in members:
+                idx_to_group_id[idx] = group_id
+                out_indices.append(idx)
+            group_id += 1
+
+        result = df.loc[out_indices].copy()
+        result['group_id'] = [idx_to_group_id[i] for i in result.index]
+        result = result.sort_values(['group_id', 'site_name'])
+        return result
     finally:
         if should_close:
             close_connection(conn)
 
-def analyze_coordinate_duplicates():
-    """
-    Analyzes coordinate duplicates without making database changes.
-    
+def analyze_coordinate_duplicates(distance_threshold_m=50.0):
+    """Analyze duplicate groups without mutating the database.
+
+    Read-only preview that detects duplicate groups and predicts which site
+    would be kept by the merge process.
+
+    Args:
+        distance_threshold_m: Distance threshold in meters for clustering.
+
     Returns:
-        A dictionary with summary statistics for review.
+        A dictionary with summary statistics and per-group site lists.
+        Returns None on unexpected errors.
     """
     logger.info("Analyzing coordinate duplicates...")
-    
+
     try:
         site_data_df, updated_chemical_df, chemical_data_df = load_csv_files()
-        
+
         updated_chemical_sites = set(updated_chemical_df['Site Name'].apply(clean_site_name))
         chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
-        
+
         conn = get_connection()
-        duplicate_groups_df = find_duplicate_coordinate_groups(conn)
+        duplicate_groups_df = find_duplicate_coordinate_groups(
+            conn,
+            distance_threshold_m=distance_threshold_m,
+        )
         close_connection(conn)
-        
+
         if duplicate_groups_df.empty:
             logger.info("No coordinate duplicate sites found")
             return {
@@ -93,42 +190,42 @@ def analyze_coordinate_duplicates():
                 'duplicate_groups': 0,
                 'examples': []
             }
-        
+
         duplicate_groups_summary = []
         total_duplicate_sites = len(duplicate_groups_df)
         group_count = 0
-        
-        # Process each group to determine which site would be kept.
-        for (rounded_lat, rounded_lon), group in duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']):
+
+        for group_key, group in duplicate_groups_df.groupby('group_id'):
             group_count += 1
             sites_in_group = list(group['site_name'])
-            
-            # Apply the same logic as the merge to predict the outcome.
+
             preferred_site, _, reason = determine_preferred_site(
                 group, updated_chemical_sites, chemical_data_sites
             )
-            
+
+            coordinates = f"(group_id={group_key})"
+
             group_info = {
-                'coordinates': f"({rounded_lat}, {rounded_lon})",
+                'coordinates': coordinates,
                 'site_count': len(group),
                 'sites': sites_in_group,
                 'would_keep': preferred_site['site_name'],
                 'reason': reason
             }
-            
+
             duplicate_groups_summary.append(group_info)
-        
+
         logger.info(f"Found {total_duplicate_sites} duplicate sites in {group_count} coordinate groups")
         if total_duplicate_sites > group_count:
             logger.info(f"Would delete {total_duplicate_sites - group_count} duplicate sites")
-        
+
         return {
             'total_duplicate_sites': total_duplicate_sites,
             'duplicate_groups': group_count,
-            'examples': duplicate_groups_summary[:5],  # Provide first 5 for a sample.
+            'examples': duplicate_groups_summary[:5],
             'all_groups': duplicate_groups_summary
         }
-        
+
     except Exception as e:
         logger.error(f"Error analyzing coordinate duplicates: {e}")
         return None
@@ -339,84 +436,97 @@ def update_csv_files_with_mapping(site_mapping):
     else:
         logger.info("No CSV updates needed - site names already current")
 
-def merge_duplicate_sites():
-    """Executes the merge process for all sites with the same coordinates."""
+def merge_duplicate_sites(distance_threshold_m=50.0):
+    """Merge duplicate sites by transferring monitoring data and deleting extras.
+
+    Mutates the SQLite database by:
+    - Grouping nearby sites via Haversine distance clustering.
+    - Selecting a preferred site per group via determine_preferred_site().
+    - Reassigning all monitoring data from duplicates to the preferred site.
+    - Deleting the now-empty duplicate site rows.
+    - Updating cleaned interim CSVs to replace deleted site names.
+
+    Args:
+        distance_threshold_m: Distance threshold in meters for clustering (default 50.0).
+
+    Returns:
+        A dictionary with counts of processed groups, deleted sites, and
+        transferred records.
+    """
     logger.info("Starting coordinate-based site merge process...")
-    
+
     try:
         site_data_df, updated_chemical_df, chemical_data_df = load_csv_files()
-        
+
         updated_chemical_sites = set(updated_chemical_df['Site Name'].apply(clean_site_name))
         chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
-        
+
         conn = get_connection()
         cursor = conn.cursor()
-        
-        duplicate_groups_df = find_duplicate_coordinate_groups(conn)
-        
+
+        duplicate_groups_df = find_duplicate_coordinate_groups(
+            conn,
+            distance_threshold_m=distance_threshold_m,
+        )
+
         groups_processed = 0
         sites_deleted = 0
         total_records_transferred = 0
-        site_mapping = {}  # Track mapping from deleted sites to preferred sites
-        
+        site_mapping = {}
+
         try:
             if not duplicate_groups_df.empty:
-                logger.info(f"Found {len(duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']))} coordinate groups with duplicates")
-                
-                for (rounded_lat, rounded_lon), group in duplicate_groups_df.groupby(['rounded_lat', 'rounded_lon']):
+                logger.info(f"Found {len(duplicate_groups_df.groupby('group_id'))} coordinate groups with duplicates")
+
+                for _, group in duplicate_groups_df.groupby('group_id'):
                     preferred_site, sites_to_merge, reason = determine_preferred_site(
                         group, updated_chemical_sites, chemical_data_sites
                     )
-                    
+
                     if not preferred_site is None and sites_to_merge:
-                        # Verify preferred site exists before proceeding  
-                        # Convert numpy types to Python native types for SQLite compatibility
                         preferred_site_id = int(preferred_site['site_id'])
-                        
+
                         cursor.execute("SELECT site_name FROM sites WHERE site_id = ?", (preferred_site_id,))
                         preferred_site_check = cursor.fetchone()
-                        
+
                         if not preferred_site_check:
                             logger.error(f"CRITICAL: Preferred site_id {preferred_site_id} ('{preferred_site['site_name']}') not found in database!")
                             raise Exception(f"Preferred site_id {preferred_site_id} not found in database")
-                        
-                        # Process all sites to merge in this group
+
                         for site_to_merge in sites_to_merge:
                             from_site_id = int(site_to_merge['site_id'])
-                            
+
                             transfer_counts = transfer_site_data(cursor, from_site_id, preferred_site_id)
                             total_records_transferred += sum(transfer_counts.values())
-                            
+
                             cursor.execute("DELETE FROM sites WHERE site_id = ?", (from_site_id,))
                             sites_deleted += 1
-                            
-                            # Add to site mapping
+
                             old_site_name = site_to_merge['site_name']
                             new_site_name = preferred_site['site_name']
                             site_mapping[old_site_name] = new_site_name
-                        
+
                         update_site_metadata(cursor, preferred_site_id, site_data_df, preferred_site['site_name'])
-                        
+
                         groups_processed += 1
-            
+
             conn.commit()
             logger.info(f"Site merge complete: {groups_processed} groups processed, {sites_deleted} sites deleted, {total_records_transferred} records transferred")
-            
-            # Apply site name mapping to CSV files
+
             if site_mapping:
                 update_csv_files_with_mapping(site_mapping)
-            
+
             return {
                 'groups_processed': groups_processed,
                 'sites_deleted': sites_deleted,
                 'records_transferred': total_records_transferred
             }
-        
+
         except Exception as e:
             conn.rollback()
             logger.error(f"Error during site merge: {e}")
             raise
-            
+
     except Exception as e:
         logger.error(f"Error in coordinate merge process: {e}")
         raise

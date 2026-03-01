@@ -1,4 +1,0 @@
-Species Type: Macroinvertebrate
-Name: Riffle Beetle
-
-Description: Riffle beetles are small aquatic beetles that indicate good water quality as they require high oxygen levels

@@ -1,5 +1,5 @@
 """
-Chemical processing adapter for Survey123 sync Cloud Function.
+Chemical processing adapter for FeatureServer sync Cloud Function.
 
 Reuses existing processing pipeline for consistency with main dashboard.
 """
@@ -24,17 +24,8 @@ if (
     sys.path.insert(0, _candidate_root)
 
 from data_processing.chemical_utils import (
-    apply_bdl_conversions,
     determine_status,
     insert_collection_event,
-    remove_empty_chemical_rows,
-    validate_chemical_data,
-)
-from data_processing.updated_chemical_processing import (
-    format_to_database_schema,
-    parse_sampling_dates,
-    process_conditional_nutrient,
-    process_simple_nutrients,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,39 +77,6 @@ def get_reference_values_from_db(conn):
     except Exception as e:
         logger.error(f"Error getting reference values: {e}")
         raise Exception(f"Cannot retrieve chemical reference values from database: {e}")
-
-def process_survey123_chemical_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply complete chemical processing pipeline to Survey123 data.
-    
-    Uses identical workflow as main processing to ensure consistency.
-    """
-    try:
-        logger.info("Starting complete processing of Survey123 chemical data...")
-        
-        if df.empty:
-            logger.warning("Empty DataFrame provided")
-            return pd.DataFrame()
-        
-        # Processing pipeline steps
-        df = parse_sampling_dates(df)
-        df = process_simple_nutrients(df)  # Nitrate, Nitrite
-        df['Ammonia'] = process_conditional_nutrient(df, 'ammonia')
-        df['Orthophosphate'] = process_conditional_nutrient(df, 'orthophosphate') 
-        df['Chloride'] = process_conditional_nutrient(df, 'chloride')
-        
-        # Format and validate
-        formatted_df = format_to_database_schema(df)
-        formatted_df = remove_empty_chemical_rows(formatted_df)
-        formatted_df = validate_chemical_data(formatted_df, remove_invalid=True)
-        formatted_df = apply_bdl_conversions(formatted_df)
-        
-        logger.info(f"Complete processing finished: {len(formatted_df)} rows ready for database")
-        return formatted_df
-        
-    except Exception as e:
-        logger.error(f"Error in complete processing pipeline: {e}")
-        return pd.DataFrame()
 
 def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any]:
     """

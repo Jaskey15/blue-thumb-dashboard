@@ -83,8 +83,6 @@ class TestSiteManagement(unittest.TestCase):
         self.sample_sites_with_duplicates = pd.DataFrame({
             'site_id': [1, 2, 3, 4, 5],
             'site_name': ['Blue Creek Site A', 'Blue Creek Site B', 'Red River Main', 'Red River Alt', 'Unique Site'],
-            'rounded_lat': [35.123, 35.123, 34.567, 34.567, 33.999],
-            'rounded_lon': [-97.123, -97.123, -96.567, -96.567, -95.999],
             'latitude': [35.1234, 35.1235, 34.5678, 34.5679, 33.9999],
             'longitude': [-97.1234, -97.1235, -96.5678, -96.5679, -95.9999],
             'county': ['Cleveland', 'Cleveland', 'Murray', 'Murray', 'Bryan'],
@@ -432,7 +430,7 @@ class TestSiteManagement(unittest.TestCase):
     def test_determine_preferred_site_updated_chemical_priority(self):
         """Test site selection prioritizes updated_chemical_data sites."""
         group = self.sample_sites_with_duplicates[
-            self.sample_sites_with_duplicates['rounded_lat'] == 35.123
+            self.sample_sites_with_duplicates['site_id'].isin([1, 2])
         ].copy()
         
         preferred_site, sites_to_merge, reason = determine_preferred_site(
@@ -447,7 +445,7 @@ class TestSiteManagement(unittest.TestCase):
     def test_determine_preferred_site_chemical_data_priority(self):
         """Test site selection falls back to chemical_data sites."""
         group = self.sample_sites_with_duplicates[
-            self.sample_sites_with_duplicates['rounded_lat'] == 34.567
+            self.sample_sites_with_duplicates['site_id'].isin([3, 4])
         ].copy()
         
         preferred_site, sites_to_merge, reason = determine_preferred_site(
@@ -514,16 +512,19 @@ class TestSiteManagement(unittest.TestCase):
             pd.DataFrame({'SiteName': ['Red River Main']})
         )
         
-        # Mock finding duplicates
-        mock_find_dupes.return_value = self.sample_sites_with_duplicates[
+        # Mock finding duplicates — include group_id for default boundary-safe mode
+        dupes = self.sample_sites_with_duplicates[
             self.sample_sites_with_duplicates['site_id'].isin([1, 2])
-        ]
-        
+        ].copy()
+        dupes['group_id'] = 0
+        mock_find_dupes.return_value = dupes
+
         mock_conn = MagicMock()
         mock_get_connection.return_value = mock_conn
-        
+
+        # Default (boundary-safe) should work with group_id data
         result = analyze_coordinate_duplicates()
-        
+
         # Should return analysis results
         self.assertIsNotNone(result)
         self.assertIn('total_duplicate_sites', result)

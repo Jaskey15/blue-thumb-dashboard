@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 
 # Add project root to path for imports
@@ -26,7 +25,6 @@ from chemical_processor import (
     classify_active_sites_in_db,
     get_reference_values_from_db,
     insert_processed_data_to_db,
-    process_survey123_chemical_data,
 )
 
 
@@ -35,35 +33,6 @@ class TestChemicalProcessor(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        # Sample Survey123 data that would come from ArcGIS API
-        self.sample_survey123_data = pd.DataFrame({
-            'Site Name': ['Test Site 1', 'Test Site 2'],
-            'Sampling Date': ['5/15/2023, 10:30 AM', '6/20/2023, 2:15 PM'],
-            '% Oxygen Saturation': [95.5, 88.0],
-            'pH #1': [7.2, 6.8],
-            'pH #2': [7.5, 6.5],
-            'Nitrate #1': [0.5, 1.2],
-            'Nitrate #2': [0.6, 1.1],
-            'Nitrite #1': [0.05, 0.1],
-            'Nitrite #2': [0.04, 0.12],
-            'Ammonia Nitrogen Range Selection': ['Low', 'Mid'],
-            'Ammonia Nitrogen Low Reading #1': [0.1, 0.3],
-            'Ammonia Nitrogen Low Reading #2': [0.12, 0.28],
-            'Ammonia_nitrogen_midrange1_Final': [np.nan, 0.4],
-            'Ammonia_nitrogen_midrange2_Final': [np.nan, 0.38],
-            'Orthophosphate Range Selection': ['Low', 'High'],
-            'Orthophosphate_Low1_Final': [0.02, 0.15],
-            'Orthophosphate_Low2_Final': [0.03, 0.14],
-            'Orthophosphate_High1_Final': [np.nan, 0.1],
-            'Orthophosphate_High2_Final': [np.nan, 0.12],
-            'Chloride Range Selection': ['Low', 'High'],
-            'Chloride_Low1_Final': [25.0, 45.0],
-            'Chloride_Low2_Final': [26.0, 44.0],
-            'Chloride_High1_Final': [np.nan, 280.0],
-            'Chloride_High2_Final': [np.nan, 275.0]
-        })
-        
-        # Sample reference values
         self.sample_reference_values = {
             'do_percent': {'normal min': 80, 'normal max': 130},
             'pH': {'normal min': 6.5, 'normal max': 9.0},
@@ -120,68 +89,6 @@ class TestChemicalProcessor(unittest.TestCase):
             get_reference_values_from_db(mock_conn)
         
         self.assertIn("Cannot retrieve chemical reference values", str(context.exception))
-    
-    def test_process_survey123_chemical_data_success(self):
-        """Test successful processing of Survey123 data."""
-        result_df = process_survey123_chemical_data(self.sample_survey123_data.copy())
-        
-        # Verify DataFrame was processed
-        self.assertFalse(result_df.empty)
-        self.assertEqual(len(result_df), 2)
-        
-        # Verify required columns are present
-        expected_columns = ['Site_Name', 'Date', 'Year', 'Month', 'do_percent', 
-                          'pH', 'Nitrate', 'Nitrite', 'Ammonia', 'Phosphorus', 
-                          'Chloride', 'soluble_nitrogen']
-        for col in expected_columns:
-            self.assertIn(col, result_df.columns)
-        
-        # Verify data processing worked correctly
-        # pH should select worst case (furthest from 7)
-        self.assertEqual(result_df.iloc[0]['pH'], 7.5)  # 7.5 is further from 7 than 7.2
-        self.assertEqual(result_df.iloc[1]['pH'], 6.5)  # 6.5 is further from 7 than 6.8
-        
-        # Nitrate should select higher value
-        self.assertEqual(result_df.iloc[0]['Nitrate'], 0.6)  # Greater of 0.5 and 0.6
-        self.assertEqual(result_df.iloc[1]['Nitrate'], 1.2)  # Greater of 1.2 and 1.1
-        
-        # Nitrite should select higher value
-        self.assertEqual(result_df.iloc[0]['Nitrite'], 0.05)  # Greater of 0.05 and 0.04
-        self.assertEqual(result_df.iloc[1]['Nitrite'], 0.12)  # Greater of 0.1 and 0.12
-        
-        # Conditional nutrients should work based on range selection
-        self.assertEqual(result_df.iloc[0]['Ammonia'], 0.12)  # Low range, greater of 0.1 and 0.12
-        self.assertEqual(result_df.iloc[1]['Ammonia'], 0.4)   # Mid range, greater of 0.4 and 0.38
-        
-        # Phosphorus (orthophosphate) should work based on range selection
-        self.assertEqual(result_df.iloc[0]['Phosphorus'], 0.03)  # Low range
-        self.assertEqual(result_df.iloc[1]['Phosphorus'], 0.12)  # High range
-        
-        # Chloride should work based on range selection
-        self.assertEqual(result_df.iloc[0]['Chloride'], 26.0)  # Low range
-        self.assertEqual(result_df.iloc[1]['Chloride'], 280.0)  # High range
-    
-    def test_process_survey123_chemical_data_empty(self):
-        """Test processing of empty DataFrame."""
-        empty_df = pd.DataFrame()
-        
-        result_df = process_survey123_chemical_data(empty_df)
-        
-        # Should return empty DataFrame
-        self.assertTrue(result_df.empty)
-    
-    def test_process_survey123_chemical_data_error_handling(self):
-        """Test error handling in processing pipeline."""
-        # Create invalid data that should cause processing errors
-        invalid_df = pd.DataFrame({
-            'Site Name': ['Test Site'],
-            'Invalid Column': ['Invalid Data']
-        })
-        
-        result_df = process_survey123_chemical_data(invalid_df)
-        
-        # Should return empty DataFrame on error
-        self.assertTrue(result_df.empty)
     
     @patch('chemical_processor.sqlite3.connect')
     @patch('chemical_processor.get_reference_values_from_db')

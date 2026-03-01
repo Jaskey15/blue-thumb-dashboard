@@ -1,4 +1,0 @@
-Species Type: Macroinvertebrate
-Name: Caddisfly
-
-Description: Caddisflies build protective cases from materials in their environment and are sensitive to pollution - making them indicators of good water quality

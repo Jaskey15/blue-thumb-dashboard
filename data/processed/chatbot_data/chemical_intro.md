@@ -1,3 +1,0 @@
-### Chemical Water Quality 
-
-Chemical water quality data provides crucial insights into stream health by revealing pollution sources and environmental stressors that may not be immediately visible. While chemical data alone cannot determine if a stream is healthy, monitoring key parameters helps detect problems and track restoration progress over time. For more information on chemical testing procedures visit the [Blue Thumb website](https://www.bluethumbok.com/monitoring-info.html). Select a site and parameter below to begin analysis. You can find site names and locations on the Overview tab

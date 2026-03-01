@@ -1,5 +1,5 @@
 """
-Tests for Survey123 data processing functions.
+Tests for FeatureServer sync behavior.
 """
 
 import os
@@ -18,87 +18,15 @@ sys.path.insert(0, os.path.join(project_root, 'cloud_functions', 'survey123_sync
 
 # Mock Cloud Function specific modules before importing
 sys.modules['functions_framework'] = MagicMock()
-sys.modules['google.cloud'] = MagicMock() 
+sys.modules['google.cloud'] = MagicMock()
 sys.modules['google.cloud.storage'] = MagicMock()
 
 import main
-from main import process_survey123_data
 import chemical_processor
 
 
-class TestSurvey123DataProcessing(unittest.TestCase):
-    """Test Survey123 data processing wrapper functions."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        # Sample Survey123 data
-        self.sample_survey123_data = pd.DataFrame({
-            'Site Name': ['Test Site 1'],
-            'Sampling Date': ['5/15/2023, 10:30 AM'],
-            '% Oxygen Saturation': [95.5],
-            'pH #1': [7.2],
-            'pH #2': [7.5],
-            'Nitrate #1': [0.5],
-            'Nitrate #2': [0.6],
-            'Nitrite #1': [0.05],
-            'Nitrite #2': [0.04],
-            'Ammonia Nitrogen Range Selection': ['Low'],
-            'Ammonia Nitrogen Low Reading #1': [0.1],
-            'Ammonia Nitrogen Low Reading #2': [0.12],
-            'Orthophosphate Range Selection': ['Low'],
-            'Orthophosphate_Low1_Final': [0.02],
-            'Orthophosphate_Low2_Final': [0.03],
-            'Chloride Range Selection': ['Low'],
-            'Chloride_Low1_Final': [25.0],
-            'Chloride_Low2_Final': [26.0]
-        })
-    
-    def test_process_survey123_data_function(self):
-        """Test the data processing function wrapper."""
-        # Test with valid data
-        result = process_survey123_data(self.sample_survey123_data.copy())
-        
-        # Should process successfully
-        self.assertFalse(result.empty)
-        self.assertIn('Site_Name', result.columns)
-        
-        # Test with empty data
-        empty_result = process_survey123_data(pd.DataFrame())
-        self.assertTrue(empty_result.empty)
-    
-    def test_process_survey123_data_error_handling(self):
-        """Test error handling in data processing function."""
-        # Create invalid data that should cause processing errors
-        invalid_df = pd.DataFrame({'Invalid': ['Data']})
-        
-        result = process_survey123_data(invalid_df)
-        
-        # Should handle errors gracefully and return empty DataFrame
-        self.assertTrue(result.empty)
-
-
 class TestSyncModeBehavior(unittest.TestCase):
-    """Executable proof for sync mode selection and feature_server routing."""
-
-    def test_get_sync_mode_precedence(self):
-        request = MagicMock()
-        request.args = {'mode': 'feature_server'}
-        request.get_json.return_value = {'mode': 'survey123'}
-
-        with patch.dict(os.environ, {'SYNC_MODE': 'survey123'}, clear=False):
-            self.assertEqual(main._get_sync_mode(request), 'feature_server')
-
-        request.args = None
-        request.get_json.return_value = {'mode': 'feature_server'}
-        with patch.dict(os.environ, {'SYNC_MODE': 'survey123'}, clear=False):
-            self.assertEqual(main._get_sync_mode(request), 'feature_server')
-
-        request.get_json.return_value = None
-        with patch.dict(os.environ, {'SYNC_MODE': 'feature_server'}, clear=False):
-            self.assertEqual(main._get_sync_mode(request), 'feature_server')
-
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(main._get_sync_mode(request), 'survey123')
+    """Executable proof for feature_server sync routing."""
 
     @patch('main.os.unlink')
     @patch('main.tempfile.NamedTemporaryFile')

@@ -1,4 +1,0 @@
-Species Type: Macroinvertebrate
-Name: Stonefly
-
-Description: Stoneflies are very sensitive to pollution and are excellent indicators of pristine water conditions

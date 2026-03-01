@@ -91,7 +91,9 @@ def register_chemical_callbacks(app):
         [Output('chemical-site-dropdown', 'options'),
          Output('chemical-site-dropdown', 'value', allow_duplicate=True),
          Output('chemical-parameter-dropdown', 'value', allow_duplicate=True),
+         Output('start-year-dropdown', 'options', allow_duplicate=True),
          Output('start-year-dropdown', 'value', allow_duplicate=True),
+         Output('end-year-dropdown', 'options', allow_duplicate=True),
          Output('end-year-dropdown', 'value', allow_duplicate=True),
          Output('month-checklist', 'value', allow_duplicate=True),
          Output('highlight-thresholds-switch', 'value', allow_duplicate=True)],
@@ -103,97 +105,105 @@ def register_chemical_callbacks(app):
     def handle_chemical_navigation_and_state_restoration(active_tab, nav_data, chemical_state):
         """Handle navigation from map, initial tab loading, and state restoration for all chemical controls."""
         if active_tab != 'chemical-tab':
-            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
         
         # Get the trigger to understand what caused this callback
         ctx = dash.callback_context
         if not ctx.triggered:
-            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-            
+            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
         trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
-        
+
         try:
             # Get all sites with chemical data
             sites = get_sites_with_data('chemical')
-            
+
             if not sites:
                 logger.warning("No sites with chemical data found")
-                return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-            
+                return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
             # Create dropdown options
             options = [{'label': site, 'value': site} for site in sorted(sites)]
             logger.info(f"Populated chemical dropdown with {len(options)} sites")
-            
+
+            # Get year range for populating year dropdowns
+            min_year, max_year = get_chemical_date_range()
+            year_options = [{'label': str(year), 'value': year} for year in range(min_year, max_year + 1)]
+
             # Priority 1: Handle navigation from map (highest priority)
-            if (nav_data and nav_data.get('target_tab') == 'chemical-tab' and 
+            if (nav_data and nav_data.get('target_tab') == 'chemical-tab' and
                 nav_data.get('target_site')):
-                
+
                 target_site = nav_data.get('target_site')
                 target_parameter = nav_data.get('target_parameter')
-                
+
                 if target_site in sites:
                     # For map navigation, set site + parameter from nav, preserve other filters from state or use defaults
-                    restored_year_range = (chemical_state.get('year_range') 
-                                         if chemical_state and chemical_state.get('year_range') 
-                                         else [dash.no_update, dash.no_update])
-                    restored_months = (chemical_state.get('selected_months') 
-                                     if chemical_state and chemical_state.get('selected_months') 
+                    restored_year_range = (chemical_state.get('year_range')
+                                         if chemical_state and chemical_state.get('year_range')
+                                         else [min_year, max_year])
+                    restored_months = (chemical_state.get('selected_months')
+                                     if chemical_state and chemical_state.get('selected_months')
                                      else dash.no_update)
-                    restored_thresholds = (chemical_state.get('highlight_thresholds') 
-                                         if chemical_state and chemical_state.get('highlight_thresholds') is not None 
+                    restored_thresholds = (chemical_state.get('highlight_thresholds')
+                                         if chemical_state and chemical_state.get('highlight_thresholds') is not None
                                          else dash.no_update)
-                    
+
                     return (
                         options,  # Site options
                         target_site,  # Set target site
                         target_parameter or 'do_percent',  # Set target parameter
-                        restored_year_range[0],  # Start year
-                        restored_year_range[1],  # End year
+                        year_options,  # Start year options
+                        restored_year_range[0],  # Start year value
+                        year_options,  # End year options
+                        restored_year_range[1],  # End year value
                         restored_months,  # Preserve months from state
                         restored_thresholds  # Preserve thresholds from state
                     )
                 else:
                     logger.warning(f"Navigation target site '{target_site}' not found in available sites")
-            
+
             # Priority 2: Restore from saved state if tab was just activated AND no active navigation
-            if (trigger_id == 'main-tabs' and chemical_state and 
+            if (trigger_id == 'main-tabs' and chemical_state and
                 chemical_state.get('selected_site') and
                 (not nav_data or not nav_data.get('target_tab'))):
-                
+
                 saved_site = chemical_state.get('selected_site')
                 saved_parameter = chemical_state.get('selected_parameter')
                 saved_year_range = chemical_state.get('year_range')
                 saved_months = chemical_state.get('selected_months')
                 saved_thresholds = chemical_state.get('highlight_thresholds')
-                
+
                 # Verify saved site is still available
                 if saved_site in sites:
                     # Convert year_range to individual start/end years
-                    start_year = saved_year_range[0] if saved_year_range else dash.no_update
-                    end_year = saved_year_range[1] if saved_year_range else dash.no_update
-                    
+                    start_year = saved_year_range[0] if saved_year_range else min_year
+                    end_year = saved_year_range[1] if saved_year_range else max_year
+
                     return (
                         options,  # Site options
                         saved_site,  # Restore site
                         saved_parameter,  # Restore parameter
+                        year_options,  # Start year options
                         start_year,  # Restore start year
+                        year_options,  # End year options
                         end_year,  # Restore end year
                         saved_months,  # Restore months
                         saved_thresholds  # Restore thresholds
                     )
                 else:
                     logger.warning(f"Saved site '{saved_site}' no longer available")
-            
+
             # Ignore navigation-store clearing events (when nav_data is empty/None)
             if trigger_id == 'navigation-store' and (not nav_data or not nav_data.get('target_tab')):
-                return options, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-            
-            # Default behavior - just populate options
-            return options, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-            
+                return options, dash.no_update, dash.no_update, year_options, dash.no_update, year_options, dash.no_update, dash.no_update, dash.no_update
+
+            # Default behavior - populate site and year options with defaults
+            return options, dash.no_update, dash.no_update, year_options, min_year, year_options, max_year, dash.no_update, dash.no_update
+
         except Exception as e:
             logger.error(f"Error in chemical navigation/state restoration: {e}")
-            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+            return [], dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
     
     # SITE SELECTION & CONTROLS
 

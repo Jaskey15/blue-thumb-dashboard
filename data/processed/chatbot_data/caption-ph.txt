@@ -1,4 +1,0 @@
-Category: Chemical Diagram
-Topic: Ph
-
-Caption: The pH scale ranges from highly acidic (0) to highly alkaline (14), with neutral water at 7. For Oklahoma streams, maintaining pH between 6.5-9 is essential for supporting diverse aquatic communities and preventing harm to sensitive species.

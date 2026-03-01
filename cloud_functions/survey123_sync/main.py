@@ -253,28 +253,6 @@ class DatabaseManager:
             return False
 
 
-def _get_sync_mode(request) -> str:
-    mode = None
-    try:
-        if hasattr(request, 'args') and request.args is not None:
-            mode = request.args.get('mode')
-    except Exception:
-        mode = None
-
-    if not mode:
-        try:
-            body = request.get_json(silent=True) if request is not None else None
-            if isinstance(body, dict):
-                mode = body.get('mode')
-        except Exception:
-            mode = None
-
-    if not mode:
-        mode = os.environ.get('SYNC_MODE')
-
-    return (mode or 'survey123').strip().lower()
-
-
 def _get_feature_server_override(request):
     since_date = None
     since_datetime = None
@@ -542,144 +520,32 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
     return result
 
 
-def process_survey123_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Process Survey123 data using existing chemical processing pipeline.
-    """
-    if df.empty:
-        return pd.DataFrame()
-    
-    logger.info(f"Processing {len(df)} Survey123 records...")
-    
-    try:
-        from chemical_processor import process_survey123_chemical_data
-        return process_survey123_chemical_data(df)
-        
-    except Exception as e:
-        logger.error(f"Error processing Survey123 data: {e}")
-        raise
-
-
-@functions_framework.http
 def survey123_daily_sync(request):
     """
-    Main Cloud Function entry point for daily Survey123 synchronization.
-    
-    Workflow:
-    1. Authenticate with ArcGIS and fetch new submissions
-    2. Process data using existing chemical pipeline
-    3. Update SQLite database with automatic backup
-    4. Record sync timestamp for next incremental run
+    Cloud Function entry point for daily FeatureServer data sync.
+
+    Fetches new chemical data from the public ArcGIS FeatureServer and
+    updates the SQLite database in Cloud Storage.
+
+    NOTE: Entry point name is legacy — retained for GCP config compatibility.
+    TODO: Rename to 'data_sync' and update GCP function config.
     """
-    
     start_time = datetime.now()
-    mode = _get_sync_mode(request)
-    logger.info(f"Starting daily sync mode={mode} at {start_time}")
+    logger.info(f"Starting FeatureServer data sync at {start_time}")
 
     try:
         db_manager = DatabaseManager(DATABASE_BUCKET)
+        return _run_feature_server_sync(db_manager, start_time, request)
 
-        if mode == 'feature_server':
-            return _run_feature_server_sync(db_manager, start_time, request)
-
-        if not all([ARCGIS_CLIENT_ID, ARCGIS_CLIENT_SECRET, SURVEY123_FORM_ID]):
-            error_msg = "Missing required environment variables"
-            logger.error(error_msg)
-            return {'error': error_msg, 'status': 'failed'}, 500
-
-        # Initialize service components
-        authenticator = ArcGISAuthenticator(ARCGIS_CLIENT_ID, ARCGIS_CLIENT_SECRET)
-        fetcher = Survey123DataFetcher(authenticator, SURVEY123_FORM_ID)
-        
-        last_sync = db_manager.get_last_sync_timestamp()
-        logger.info(f"Last sync was at: {last_sync}")
-        
-        # Fetch and process new data
-        new_data = fetcher.get_submissions_since(last_sync)
-        
-        if new_data.empty:
-            logger.info("No new Survey123 submissions found")
-            return {
-                'status': 'success',
-                'mode': 'survey123',
-                'message': 'No new data to process',
-                'records_processed': 0,
-                'execution_time': str(datetime.now() - start_time),
-                'last_sync': last_sync.isoformat(),
-                'current_sync': start_time.isoformat()
-            }
-        
-        processed_data = process_survey123_data(new_data)
-        
-        # Database update with temporary file handling
-        temp_db_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
-                temp_db_path = temp_db.name
-                if not db_manager.download_database(temp_db.name):
-                    raise Exception("Failed to download database")
-                
-                from chemical_processor import (
-                    classify_active_sites_in_db,
-                    insert_processed_data_to_db,
-                )
-                insert_result = insert_processed_data_to_db(processed_data, temp_db.name)
-                
-                if 'error' in insert_result:
-                    raise Exception(f"Database insertion failed: {insert_result['error']}")
-                
-                # Reclassify active/historic sites after inserting new data
-                classification_result = classify_active_sites_in_db(temp_db.name)
-                if 'error' in classification_result:
-                    logger.warning(f"Site classification failed: {classification_result['error']}")
-                else:
-                    logger.info(f"Site classification updated: {classification_result['active_count']} active, {classification_result['historic_count']} historic")
-                
-                if not db_manager.upload_database(temp_db.name):
-                    raise Exception("Failed to upload updated database")
-        finally:
-            if temp_db_path:
-                try:
-                    os.unlink(temp_db_path)
-                except FileNotFoundError:
-                    pass
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
-        
-        db_manager.update_sync_timestamp(start_time)
-        
-        # Success response with execution metrics
-        result = {
-            'status': 'success',
-            'mode': 'survey123',
-            'message': f'Successfully processed {len(processed_data)} new records',
-            'records_processed': len(processed_data),
-            'records_inserted': insert_result.get('records_inserted', 0),
-            'execution_time': str(datetime.now() - start_time),
-            'last_sync': last_sync.isoformat(),
-            'current_sync': start_time.isoformat()
-        }
-        
-        # Add site classification results if available
-        if 'error' not in classification_result:
-            result['site_classification'] = {
-                'sites_classified': classification_result.get('sites_classified', 0),
-                'active_count': classification_result.get('active_count', 0),
-                'historic_count': classification_result.get('historic_count', 0)
-            }
-        
-        logger.info(f"Sync completed successfully: {result}")
-        return result
-        
     except Exception as e:
         error_msg = f"Sync failed: {str(e)}"
         logger.error(error_msg)
-        
         return {
             'status': 'failed',
             'error': error_msg,
             'execution_time': str(datetime.now() - start_time)
         }, 500
+
 
 if __name__ == "__main__":
     # Local testing support
@@ -687,4 +553,4 @@ if __name__ == "__main__":
         pass
     
     result = survey123_daily_sync(MockRequest())
-    print(json.dumps(result, indent=2)) 
+    print(json.dumps(result, indent=2))

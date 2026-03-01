@@ -1,4 +1,0 @@
-Species Type: Fish
-Name: Longear Sunfish
-
-Description: Longear Sunfish are known for their vibrant colors and distinctive long ear flap.

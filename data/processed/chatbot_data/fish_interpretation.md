@@ -1,3 +1,0 @@
-### Interpretation
-
-Higher IBI scores indicate healthier fish communities and better overall stream conditions. Excellent streams (scores above 97% of reference) support diverse fish communities with many sensitive species, while poor streams show dominance by tolerant species and loss of specialized feeding and spawning groups. Compare your site's trends over time to see if conditions are improving or declining, and look for patterns that might relate to seasonal changes, weather events, or local land use activities. Remember that fish communities respond to long-term conditions, so changes may reflect cumulative impacts over months or years rather than recent events.
