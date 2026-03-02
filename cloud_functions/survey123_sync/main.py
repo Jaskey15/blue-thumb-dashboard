@@ -1,15 +1,15 @@
 """
-Survey123 Daily Sync Cloud Function
+FeatureServer Daily Sync Cloud Function
 
-Automated daily synchronization of Survey123 submissions with Blue Thumb Dashboard.
-Downloads new chemical data via ArcGIS REST API and updates SQLite database in Cloud Storage.
+Automated daily synchronization of chemical data from the public ArcGIS FeatureServer
+with the Blue Thumb Dashboard. Updates SQLite database in Cloud Storage.
+
+NOTE: Entry point name 'survey123_daily_sync' is legacy — retained for GCP config compatibility.
+TODO: Rename to 'data_sync' and update GCP function config.
 
 Environment Variables:
 - GOOGLE_CLOUD_PROJECT: GCP project ID
 - GCS_BUCKET_DATABASE: Cloud Storage bucket for database
-- ARCGIS_CLIENT_ID: ArcGIS service account client ID
-- ARCGIS_CLIENT_SECRET: ArcGIS service account secret
-- SURVEY123_FORM_ID: Survey123 form identifier
 """
 
 import json
@@ -23,7 +23,6 @@ from typing import Optional
 
 import functions_framework
 import pandas as pd
-import requests
 from google.cloud import storage
 
 logging.basicConfig(level=logging.INFO)
@@ -42,107 +41,7 @@ if (
 # Environment configuration
 PROJECT_ID = os.environ.get('GOOGLE_CLOUD_PROJECT')
 DATABASE_BUCKET = os.environ.get('GCS_BUCKET_DATABASE', 'blue-thumb-database')
-ARCGIS_CLIENT_ID = os.environ.get('ARCGIS_CLIENT_ID')
-ARCGIS_CLIENT_SECRET = os.environ.get('ARCGIS_CLIENT_SECRET')
-SURVEY123_FORM_ID = os.environ.get('SURVEY123_FORM_ID')
 
-# ArcGIS endpoints
-ARCGIS_TOKEN_URL = "https://www.arcgis.com/sharing/rest/oauth2/token"
-SURVEY123_API_BASE = "https://survey123.arcgis.com/api/featureServices"
-
-class ArcGISAuthenticator:
-    """Handle ArcGIS authentication with automatic token refresh."""
-    
-    def __init__(self, client_id: str, client_secret: str):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.access_token = None
-        self.token_expires = None
-    
-    def get_access_token(self) -> str:
-        """Get valid access token, refreshing if needed."""
-        token_expires = self.token_expires
-        if isinstance(token_expires, datetime) and token_expires.tzinfo is not None:
-            token_expires = token_expires.astimezone(timezone.utc).replace(tzinfo=None)
-
-        if self.access_token and token_expires and datetime.now() < token_expires:
-            return self.access_token
-        
-        logger.info("Requesting new ArcGIS access token...")
-        
-        data = {
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-            'grant_type': 'client_credentials'
-        }
-        
-        response = requests.post(ARCGIS_TOKEN_URL, data=data)
-        response.raise_for_status()
-        
-        token_data = response.json()
-        self.access_token = token_data['access_token']
-        expires_in = token_data.get('expires_in', 3600) - 300  # 5 minute buffer for safety
-        self.token_expires = datetime.now() + timedelta(seconds=expires_in)
-        
-        logger.info("Successfully obtained ArcGIS access token")
-        return self.access_token
-
-class Survey123DataFetcher:
-    """Fetch Survey123 submissions using ArcGIS REST API."""
-    
-    def __init__(self, authenticator: ArcGISAuthenticator, form_id: str):
-        self.authenticator = authenticator
-        self.form_id = form_id
-    
-    def get_submissions_since(self, since_date: datetime) -> pd.DataFrame:
-        """Fetch new Survey123 submissions since specified date."""
-        logger.info(f"Fetching Survey123 submissions since {since_date}")
-        
-        since_epoch = int(since_date.timestamp() * 1000)  # ArcGIS expects epoch milliseconds
-        
-        query_url = f"{SURVEY123_API_BASE}/{self.form_id}/0/query"
-        
-        params = {
-            'token': self.authenticator.get_access_token(),
-            'where': f"CreationDate > {since_epoch}",
-            'outFields': '*',
-            'f': 'json',
-            'resultRecordCount': 1000
-        }
-        
-        try:
-            response = requests.get(query_url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if 'error' in data:
-                raise Exception(f"ArcGIS API error: {data['error']}")
-            
-            features = data.get('features', [])
-            logger.info(f"Retrieved {len(features)} Survey123 submissions")
-            
-            if not features:
-                return pd.DataFrame()
-            
-            # Convert feature attributes to DataFrame
-            records = []
-            for feature in features:
-                attributes = feature.get('attributes', {})
-                # Skip features with None or invalid attributes
-                if attributes is not None and isinstance(attributes, dict):
-                    records.append(attributes)
-                else:
-                    logger.warning(f"Skipping feature with invalid attributes: {feature}")
-            
-            df = pd.DataFrame(records)
-            logger.info(f"Converted to DataFrame with {len(df)} rows and {len(df.columns)} columns")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error fetching Survey123 data: {e}")
-            raise
 
 class DatabaseManager:
     """Manage SQLite database operations in Cloud Storage with backup handling."""
