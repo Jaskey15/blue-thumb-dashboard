@@ -65,7 +65,6 @@ def _refresh_loop(destination_path: str):
 
         client = storage.Client()
         bucket = client.bucket(bucket_name)
-        blob = bucket.blob(_GCS_DB_BLOB_NAME)
     except Exception as e:
         logger.error(f"Failed to initialize GCS client for DB refresh: {e}")
         return
@@ -76,7 +75,10 @@ def _refresh_loop(destination_path: str):
 
             time.sleep(_DB_REFRESH_INTERVAL_SECONDS)
 
-            blob.reload()
+            blob = bucket.get_blob(_GCS_DB_BLOB_NAME)
+            if blob is None:
+                continue
+
             generation = getattr(blob, "generation", None)
             if generation is not None and generation == _last_seen_generation:
                 continue
@@ -143,12 +145,10 @@ def _maybe_refresh_gcp_db_on_request(db_path: str):
 
         client = storage.Client()
         bucket = client.bucket(bucket_name)
-        blob = bucket.blob(_GCS_DB_BLOB_NAME)
-
-        if not blob.exists():
+        blob = bucket.get_blob(_GCS_DB_BLOB_NAME)
+        if blob is None:
             return
 
-        blob.reload()
         generation = getattr(blob, "generation", None)
         if generation is None or generation == _last_seen_generation:
             return

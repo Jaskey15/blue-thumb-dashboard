@@ -28,6 +28,29 @@ PARAMETER_MAP = {
     'Chloride': 5
 }
 
+# Finding #1: Move site_aliases and _normalize_site_name to shared utility
+SITE_ALIASES = {
+    'cow creek: virginia avenue': 'Cow Creek: West Virginia Avenue',
+    'cow creek: virginia ave': 'Cow Creek: West Virginia Avenue',
+    'blue beaver creek: cache rd': 'Blue Beaver Creek: Pecan Road',
+    'mooser creek: riverfield': 'Mooser Creek Trib: Riverfield School',
+    'deep fork river: canyon park': 'Deep Fork Tributary: Classen',
+    'tributary to arkansas river: walton': 'Unknown Trib to Arkansas River',
+}
+
+import re
+from typing import Any
+
+def normalize_site_name(name: Any) -> str:
+    """
+    Collapse all runs of whitespace to a single space, strip edges, 
+    and remove trailing periods. Returns empty string if name is None/NaN.
+    """
+    if name is None or pd.isna(name):
+        return ''
+    normalized = re.sub(r'\s+', ' ', str(name).strip())
+    return normalized.rstrip('.')
+
 # BDL (Below Detection Limit) values provided by the Blue Thumb Coordinator.
 BDL_VALUES = {
     'Nitrate': 0.3,    

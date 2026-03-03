@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
+from data_processing.chemical_utils import normalize_site_name
+
 try:
     from data_processing import setup_logging
 except ModuleNotFoundError:
@@ -99,10 +101,8 @@ OUT_FIELDS = list(ARCGIS_FIELD_MAP.keys())
 
 
 def _normalize_site_name(name):
-    """Collapse all runs of whitespace to a single space and strip edges."""
-    if pd.isna(name) or name is None:
-        return None
-    return re.sub(r'\s+', ' ', str(name).strip())
+    # Left as a shim for local logic but now just calls the shared util
+    return normalize_site_name(name) or None
 
 
 def fetch_features_since(since_date, timeout_seconds=30):
