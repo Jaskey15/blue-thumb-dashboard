@@ -114,7 +114,8 @@ def fetch_features_since(since_date, timeout_seconds=30):
         timeout_seconds: HTTP request timeout.
 
     Returns:
-        List of feature attribute dictionaries.
+        List of feature attribute dictionaries. Each dict includes '_geometry_x'
+        and '_geometry_y' keys (WGS84 longitude/latitude) when available.
     """
     if isinstance(since_date, datetime):
         since_str = since_date.strftime('%Y-%m-%d')
@@ -131,6 +132,7 @@ def fetch_features_since(since_date, timeout_seconds=30):
         out_fields=OUT_FIELDS,
         order_by_fields='day DESC',
         timeout_seconds=timeout_seconds,
+        return_geometry=True,
     )
 
 
@@ -156,6 +158,7 @@ def fetch_features_edited_since(since_datetime, timeout_seconds=30):
             out_fields=out_fields,
             order_by_fields='EditDate DESC',
             timeout_seconds=timeout_seconds,
+            return_geometry=True,
         )
     except ValueError as e:
         if since_ts_str is None:
@@ -172,10 +175,67 @@ def fetch_features_edited_since(since_datetime, timeout_seconds=30):
             out_fields=out_fields,
             order_by_fields='EditDate DESC',
             timeout_seconds=timeout_seconds,
+            return_geometry=True,
         )
 
 
-def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_seconds=30):
+def fetch_geometry_for_objectids(objectids, timeout_seconds=30):
+    """
+    Fetch geometry (lat/lon) from the Feature Server for specific objectids.
+
+    Used to obtain coordinates for unknown sites that were skipped during sync,
+    so operators can add them to the sites table with verified coordinates.
+    See docs/decisions/UNKNOWN_SITES_INVESTIGATION.md for context.
+
+    Args:
+        objectids: List of integer objectids (Feature Server primary keys).
+        timeout_seconds: HTTP request timeout.
+
+    Returns:
+        Dict mapping objectid → {'site_name': str, 'latitude': float, 'longitude': float}.
+        Objectids with no geometry or missing from FeatureServer are omitted.
+    """
+    if not objectids:
+        return {}
+
+    id_list = ','.join(str(int(oid)) for oid in objectids)
+    where = f"objectid IN ({id_list})"
+
+    records = _fetch_features_paginated(
+        where=where,
+        out_fields=['objectid', 'SiteName'],
+        order_by_fields='objectid ASC',
+        timeout_seconds=timeout_seconds,
+        return_geometry=True,
+    )
+
+    result = {}
+    for rec in records:
+        oid = rec.get('objectid')
+        lat = rec.get('_geometry_y')
+        lon = rec.get('_geometry_x')
+        site_name = rec.get('SiteName')
+        if oid is not None and lat is not None and lon is not None:
+            result[int(oid)] = {
+                'site_name': site_name,
+                'latitude': lat,
+                'longitude': lon,
+            }
+
+    return result
+
+
+def _fetch_features_paginated(
+    where, out_fields, order_by_fields, timeout_seconds=30, return_geometry=False
+):
+    """
+    Paginate through Feature Server results.
+
+    When return_geometry=True, each record dict will include '_geometry_x' and
+    '_geometry_y' keys populated from the feature's point geometry (WGS84
+    longitude and latitude respectively). Records without geometry are included
+    but those keys will be None.
+    """
     result_offset = 0
     page_size = 2000
     records = []
@@ -189,6 +249,10 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
             'resultRecordCount': page_size,
             'resultOffset': result_offset,
         }
+        if return_geometry:
+            params['returnGeometry'] = 'true'
+            params['geometryType'] = 'esriGeometryPoint'
+            params['outSR'] = '4326'  # WGS84
 
         logger.info(
             f"Querying Feature Server: offset={result_offset} page_size={page_size} where={where}"
@@ -212,6 +276,14 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
         for f in features:
             attrs = f.get('attributes') if isinstance(f, dict) else None
             if isinstance(attrs, dict):
+                if return_geometry:
+                    geometry = f.get('geometry') if isinstance(f, dict) else None
+                    if isinstance(geometry, dict):
+                        attrs['_geometry_x'] = geometry.get('x')
+                        attrs['_geometry_y'] = geometry.get('y')
+                    else:
+                        attrs['_geometry_x'] = None
+                        attrs['_geometry_y'] = None
                 records.append(attrs)
 
         if not features:
