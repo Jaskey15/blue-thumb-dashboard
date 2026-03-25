@@ -431,6 +431,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
     return result
 
 
+@functions_framework.http
 def survey123_daily_sync(request):
     """
     Cloud Function entry point for daily FeatureServer data sync.
