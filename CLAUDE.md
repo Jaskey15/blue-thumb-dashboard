@@ -44,7 +44,7 @@ tests/                          # 40 test files mirroring source structure
 
 ## Gotchas
 
-- **`updated_chemical_processing.py` is NOT a newer version of `chemical_processing.py`** — they handle different data formats from different collection periods. Both are active. `arcgis_sync.py` is a third pathway that fetches from the FeatureServer and feeds into the same pipeline as `updated_chemical_processing.py`.
+- **`chemical_processing.py` and `arcgis_sync.py` are NOT versions of each other** — `chemical_processing.py` handles legacy pre-2020 CSV data; `arcgis_sync.py` fetches current-period data directly from the ArcGIS Feature Server. Different data formats, different collection periods.
 - **Sites must exist before loading any data type** — all processing tables have foreign keys to `sites`. Run site pipeline first.
 - **`data/raw/` is read-only** — never modify raw CSVs. Cleaned versions go to `data/interim/`.
 - **`data_queries.py` is the primary retrieval interface** — callbacks and visualizations should query through this module. Exception: `map_queries.py` has direct DB access for map-specific queries.
