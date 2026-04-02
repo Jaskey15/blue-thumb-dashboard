@@ -91,7 +91,7 @@ class TestSiteManagement(unittest.TestCase):
         })
         
         # Sample CSV site lists for priority testing
-        self.updated_chemical_sites = {'Blue Creek Site A', 'Some Other Site'}
+        self.feature_server_sites = {'Blue Creek Site A', 'Some Other Site'}
         self.chemical_data_sites = {'Red River Main', 'Another Site'}
         
         # Sample master sites data (for site processing)
@@ -430,19 +430,19 @@ class TestSiteManagement(unittest.TestCase):
             # Should return only the duplicate sites (4 out of 5)
             self.assertEqual(len(result), 4)
 
-    def test_determine_preferred_site_updated_chemical_priority(self):
-        """Test site selection prioritizes updated_chemical_data sites."""
+    def test_determine_preferred_site_feature_server_priority(self):
+        """Test site selection prioritizes Feature Server sites."""
         group = self.sample_sites_with_duplicates[
             self.sample_sites_with_duplicates['site_id'].isin([1, 2])
         ].copy()
-        
+
         preferred_site, sites_to_merge, reason = determine_preferred_site(
-            group, self.updated_chemical_sites, self.chemical_data_sites
+            group, self.feature_server_sites, self.chemical_data_sites
         )
-        
-        # Should prefer the site in updated_chemical_data
+
+        # Should prefer the site in Feature Server data
         self.assertEqual(preferred_site['site_name'], 'Blue Creek Site A')
-        self.assertIn("updated_chemical", reason.lower())
+        self.assertIn("feature_server", reason.lower())
         self.assertEqual(len(sites_to_merge), 1)
 
     def test_determine_preferred_site_chemical_data_priority(self):
@@ -452,7 +452,7 @@ class TestSiteManagement(unittest.TestCase):
         ].copy()
         
         preferred_site, sites_to_merge, reason = determine_preferred_site(
-            group, self.updated_chemical_sites, self.chemical_data_sites
+            group, self.feature_server_sites, self.chemical_data_sites
         )
         
         # Should prefer the site in chemical_data
@@ -503,15 +503,15 @@ class TestSiteManagement(unittest.TestCase):
         total_transferred = sum(result.values())
         self.assertEqual(total_transferred, expected_total)
 
-    @patch('data_processing.merge_sites.load_csv_files')
+    @patch('data_processing.merge_sites.load_reference_data')
     @patch('data_processing.merge_sites.find_duplicate_coordinate_groups')
     @patch('data_processing.merge_sites.get_connection')
-    def test_analyze_coordinate_duplicates_with_data(self, mock_get_connection, mock_find_dupes, mock_load_csv):
+    def test_analyze_coordinate_duplicates_with_data(self, mock_get_connection, mock_find_dupes, mock_load_ref):
         """Test analyzing coordinate duplicates when duplicates exist."""
-        # Mock CSV loading
-        mock_load_csv.return_value = (
+        # Mock reference data loading
+        mock_load_ref.return_value = (
             pd.DataFrame({'SiteName': ['Site A', 'Site B']}),
-            pd.DataFrame({'Site Name': ['Blue Creek Site A']}),
+            {'Blue Creek Site A'},
             pd.DataFrame({'SiteName': ['Red River Main']})
         )
         
