@@ -40,7 +40,7 @@ tests/                          # 40 test files mirroring source structure
 - **BDL handling**: Zero = below detection limit (replaced with threshold). NaN = data gap (preserved)
 - **Callbacks**: Convention is `prevent_initial_call=True`. Registered centrally in `callbacks/__init__.py`
 - **State**: `dcc.Store` for session persistence. Priority: saved state > navigation state > defaults
-- **Three chemical data pathways**: `chemical_processing.py` (original single-value CSV), `updated_chemical_processing.py` (multi-range Low/Mid/High CSV), and `arcgis_sync.py` (real-time FeatureServer). All share `chemical_utils.py`
+- **Two chemical data pathways**: `chemical_processing.py` (legacy single-value CSV for pre-2020 data) and `arcgis_sync.py` (API-first pipeline fetching directly from the ArcGIS Feature Server for current-period data). Both share `chemical_utils.py`
 
 ## Gotchas
 
