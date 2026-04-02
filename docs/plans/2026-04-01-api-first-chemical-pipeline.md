@@ -688,8 +688,8 @@ class TestProcessFetchedDataIntegration(unittest.TestCase):
         row = result.iloc[0]
         self.assertEqual(row['Site_Name'], 'Fisher Creek: Hwy 51')
         self.assertEqual(row['do_percent'], 95.0)
-        # pH worst-case: 7.2 is further from 7 than 7.8
-        self.assertEqual(row['pH'], 7.2)
+        # pH worst-case: 7.8 is further from 7 (0.8) than 7.2 (0.2)
+        self.assertEqual(row['pH'], 7.8)
         self.assertEqual(row['Nitrate'], 1.5)  # greater of 1.5, 1.2
         self.assertEqual(row['Nitrite'], 0.05)  # greater of 0.05, 0.03
         self.assertEqual(row['Ammonia'], 0.1)  # low range, greater of 0.1, 0.08

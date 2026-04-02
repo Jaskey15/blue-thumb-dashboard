@@ -554,11 +554,19 @@ def fetch_site_data(timeout_seconds=30):
     df = pd.DataFrame(rows)
     df = df[df['site_name'].notna() & (df['site_name'] != '')]
 
-    # Deduplicate by site name
+    # Deduplicate by site name, warn if coordinates differ
     before = len(df)
-    df = df.drop_duplicates(subset=['site_name'], keep='first')
-    dupes = before - len(df)
-    if dupes > 0:
+    dupes_mask = df.duplicated(subset=['site_name'], keep='first')
+    if dupes_mask.any():
+        for site_name in df.loc[dupes_mask, 'site_name'].unique():
+            site_rows = df[df['site_name'] == site_name]
+            lat_diff = site_rows['latitude'].nunique() > 1
+            lon_diff = site_rows['longitude'].nunique() > 1
+            if lat_diff or lon_diff:
+                coords = [(r['latitude'], r['longitude']) for _, r in site_rows.iterrows()]
+                logger.warning(f"Site '{site_name}' has differing coordinates: {coords}")
+        df = df[~dupes_mask]
+        dupes = before - len(df)
         logger.info(f"Deduplicated {dupes} duplicate site entries")
 
     logger.info(f"Fetched {len(df)} unique sites from Feature Server")
