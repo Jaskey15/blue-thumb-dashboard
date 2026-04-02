@@ -350,7 +350,8 @@ def fetch_features_edited_since(since_datetime, timeout_seconds=30):
         )
 
 
-def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_seconds=30):
+def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_seconds=30,
+                              return_geometry=False):
     result_offset = 0
     page_size = 2000
     records = []
@@ -363,6 +364,7 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
             'orderByFields': order_by_fields,
             'resultRecordCount': page_size,
             'resultOffset': result_offset,
+            'returnGeometry': return_geometry,
         }
 
         logger.info(
@@ -385,9 +387,14 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
         )
 
         for f in features:
-            attrs = f.get('attributes') if isinstance(f, dict) else None
-            if isinstance(attrs, dict):
-                records.append(attrs)
+            if return_geometry:
+                # Return full feature dicts so geometry is accessible
+                if isinstance(f, dict):
+                    records.append(f)
+            else:
+                attrs = f.get('attributes') if isinstance(f, dict) else None
+                if isinstance(attrs, dict):
+                    records.append(attrs)
 
         if not features:
             break
@@ -504,6 +511,58 @@ def filter_known_sites(df):
         )
 
     return df[known_mask].copy(), skipped
+
+
+def fetch_site_data(timeout_seconds=30):
+    """
+    Fetch distinct site names, coordinates, and county from the Feature Server.
+
+    Used by consolidate_sites.py to register Feature Server sites during
+    site consolidation (priority 4 slot).
+
+    Returns:
+        DataFrame with columns: site_name, latitude, longitude, county,
+        river_basin, ecoregion, source_file, source_description
+    """
+    records = _fetch_features_paginated(
+        where="1=1",
+        out_fields=['SiteName', 'CountyName'],
+        order_by_fields='SiteName ASC',
+        timeout_seconds=timeout_seconds,
+        return_geometry=True,
+    )
+
+    if not records:
+        logger.warning("No sites found on Feature Server")
+        return pd.DataFrame()
+
+    rows = []
+    for record in records:
+        attrs = record.get('attributes', record)
+        geom = record.get('geometry', {})
+        rows.append({
+            'site_name': _normalize_site_name(attrs.get('SiteName')),
+            'latitude': geom.get('y'),
+            'longitude': geom.get('x'),
+            'county': attrs.get('CountyName'),
+            'river_basin': None,
+            'ecoregion': None,
+            'source_file': 'arcgis_feature_server',
+            'source_description': 'ArcGIS Feature Server',
+        })
+
+    df = pd.DataFrame(rows)
+    df = df[df['site_name'].notna() & (df['site_name'] != '')]
+
+    # Deduplicate by site name
+    before = len(df)
+    df = df.drop_duplicates(subset=['site_name'], keep='first')
+    dupes = before - len(df)
+    if dupes > 0:
+        logger.info(f"Deduplicated {dupes} duplicate site entries")
+
+    logger.info(f"Fetched {len(df)} unique sites from Feature Server")
+    return df
 
 
 def get_db_latest_chemical_date():
@@ -624,6 +683,96 @@ def sync_new_chemical_data(since_date=None, dry_run=False):
     }
 
     logger.info(f"=== Sync complete: {result['records_inserted']} measurements inserted ===")
+    return result
+
+
+def sync_all_chemical_data(dry_run=False):
+    """
+    Fetch ALL current-period chemical records from Feature Server and insert into DB.
+
+    Used by reset_database.py for full database rebuilds. Unlike sync_new_chemical_data()
+    which fetches incrementally by date, this fetches everything.
+
+    Args:
+        dry_run: If True, fetch and process but skip database insertion.
+
+    Returns:
+        Dictionary with sync results and statistics.
+    """
+    start_time = datetime.now()
+    logger.info("=== ArcGIS Full Sync: fetching ALL records ===")
+
+    records = _fetch_features_paginated(
+        where="QAQC_Complete IS NOT NULL",
+        out_fields=CHEMICAL_FIELDS,
+        order_by_fields='day ASC',
+    )
+
+    if not records:
+        logger.info("No records found on Feature Server")
+        return {
+            'status': 'success',
+            'records_fetched': 0,
+            'records_inserted': 0,
+            'execution_time': str(datetime.now() - start_time),
+        }
+
+    df = prepare_dataframe(records)
+    if df.empty:
+        return {
+            'status': 'success',
+            'records_fetched': len(records),
+            'records_after_qaqc': 0,
+            'records_inserted': 0,
+            'execution_time': str(datetime.now() - start_time),
+        }
+
+    processed_df = process_fetched_data(df)
+    if processed_df.empty:
+        return {
+            'status': 'success',
+            'records_fetched': len(records),
+            'records_after_processing': 0,
+            'records_inserted': 0,
+            'execution_time': str(datetime.now() - start_time),
+        }
+
+    filtered_df, skipped_sites = filter_known_sites(processed_df)
+
+    if dry_run:
+        logger.info(f"DRY RUN: would insert {len(filtered_df)} records")
+        return {
+            'status': 'dry_run',
+            'records_fetched': len(records),
+            'records_after_processing': len(processed_df),
+            'records_ready': len(filtered_df),
+            'skipped_sites': skipped_sites,
+            'execution_time': str(datetime.now() - start_time),
+        }
+
+    if filtered_df.empty:
+        return {
+            'status': 'success',
+            'records_fetched': len(records),
+            'records_inserted': 0,
+            'skipped_sites': skipped_sites,
+            'execution_time': str(datetime.now() - start_time),
+        }
+
+    stats = insert_chemical_data(filtered_df, data_source="arcgis_feature_server")
+
+    result = {
+        'status': 'success',
+        'records_fetched': len(records),
+        'records_after_processing': len(processed_df),
+        'records_inserted': stats.get('measurements_added', 0),
+        'events_added': stats.get('events_added', 0),
+        'sites_processed': stats.get('sites_processed', 0),
+        'skipped_sites': skipped_sites,
+        'execution_time': str(datetime.now() - start_time),
+    }
+
+    logger.info(f"=== Full sync complete: {result['records_inserted']} measurements inserted ===")
     return result
 
 
