@@ -132,7 +132,7 @@ class TestDataReloading:
     @patch('database.reset_database.merge_duplicate_sites')
     @patch('database.reset_database.generate_final_data_summary')
     @patch('database.reset_database.load_chemical_data_to_db')
-    @patch('database.reset_database.load_updated_chemical_data_to_db')
+    @patch('database.reset_database.sync_all_chemical_data')
     @patch('database.reset_database.load_fish_data')
     @patch('database.reset_database.load_macroinvertebrate_data')
     @patch('database.reset_database.load_habitat_data')
@@ -140,7 +140,7 @@ class TestDataReloading:
     @patch('database.reset_database.cleanup_unused_sites')
     def test_complete_data_loading(
         self, mock_cleanup, mock_classify, mock_habitat, mock_macro, mock_fish,
-        mock_updated_chemical, mock_chemical, mock_summary, mock_merge,
+        mock_sync_all, mock_chemical, mock_summary, mock_merge,
         mock_site, mock_consolidate, mock_verify
     ):
         """Test loading all data types with new Sites First approach."""
@@ -155,10 +155,10 @@ class TestDataReloading:
             'biological': {'fish_events': 50, 'macro_events': 75},
             'habitat': {'assessments': 25}
         }
-        
+
         # Set up monitoring data loading mocks (Phase 2)
         mock_chemical.return_value = True
-        mock_updated_chemical.return_value = True
+        mock_sync_all.return_value = {'status': 'success', 'records_inserted': 100}
         mock_fish.return_value = True
         mock_macro.return_value = True
         mock_habitat.return_value = True
@@ -179,8 +179,7 @@ class TestDataReloading:
         
         # Phase 2: Monitoring Data Loading
         mock_chemical.assert_called_once()
-        mock_updated_chemical.assert_called_once()
-        # Note: Chemical duplicate consolidation step was removed
+        mock_sync_all.assert_called_once()
         mock_fish.assert_called_once()
         mock_macro.assert_called_once()
         mock_habitat.assert_called_once()

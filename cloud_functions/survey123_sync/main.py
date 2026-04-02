@@ -199,7 +199,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                     'current_sync': start_time.isoformat(),
                 }
 
-            df = arcgis_sync.translate_to_pipeline_schema(records)
+            df = arcgis_sync.prepare_dataframe(records)
             processed_data = arcgis_sync.process_fetched_data(df)
 
             if processed_data.empty:

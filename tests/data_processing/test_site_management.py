@@ -252,8 +252,9 @@ class TestSiteManagement(unittest.TestCase):
         self.assertEqual(len(conflicts), 1)
         self.assertIn('county', conflicts[0])
 
+    @patch('data_processing.arcgis_sync.fetch_site_data', return_value=pd.DataFrame())
     @patch('data_processing.consolidate_sites.extract_sites_from_csv')
-    def test_consolidate_sites_priority_order(self, mock_extract):
+    def test_consolidate_sites_priority_order(self, mock_extract, mock_fetch_sites):
         """Test that sites are processed in correct priority order."""
         # Mock the extract function to return different data for different configs
         def side_effect(config):
@@ -281,9 +282,9 @@ class TestSiteManagement(unittest.TestCase):
                 })
             else:
                 return pd.DataFrame()
-        
+
         mock_extract.side_effect = side_effect
-        
+
         consolidated_sites, conflicts_df = consolidate_sites()
         
         # Should have 2 sites total (1 from site_data, 1 new from chemical_data)
@@ -297,8 +298,9 @@ class TestSiteManagement(unittest.TestCase):
         # Should have no conflicts since no conflicting data
         self.assertTrue(conflicts_df.empty)
 
+    @patch('data_processing.arcgis_sync.fetch_site_data', return_value=pd.DataFrame())
     @patch('data_processing.consolidate_sites.extract_sites_from_csv')
-    def test_consolidate_sites_metadata_filling(self, mock_extract):
+    def test_consolidate_sites_metadata_filling(self, mock_extract, mock_fetch_sites):
         """Test that missing metadata gets filled from lower priority sources."""
         def side_effect(config):
             if 'site_data' in config['file']:
@@ -325,9 +327,9 @@ class TestSiteManagement(unittest.TestCase):
                 })
             else:
                 return pd.DataFrame()
-        
+
         mock_extract.side_effect = side_effect
-        
+
         consolidated_sites, conflicts_df = consolidate_sites()
         
         # Should have 1 site with county filled from chemical_data
@@ -374,11 +376,12 @@ class TestSiteManagement(unittest.TestCase):
 
     def test_empty_input_handling(self):
         """Test behavior with empty input data."""
-        with patch('data_processing.consolidate_sites.extract_sites_from_csv') as mock_extract:
+        with patch('data_processing.consolidate_sites.extract_sites_from_csv') as mock_extract, \
+             patch('data_processing.arcgis_sync.fetch_site_data', return_value=pd.DataFrame()):
             mock_extract.return_value = pd.DataFrame()  # Always return empty
-            
+
             consolidated_sites, conflicts_df = consolidate_sites()
-            
+
             # Should handle empty input gracefully
             self.assertTrue(consolidated_sites.empty)
             self.assertTrue(conflicts_df.empty)
@@ -880,9 +883,10 @@ class TestSiteManagement(unittest.TestCase):
         self.assertGreaterEqual(mock_cursor.execute.call_count, 3)  # At least 1 max query + 2 updates
         mock_conn.commit.assert_called_once()
 
+    @patch('data_processing.arcgis_sync.fetch_site_data', return_value=pd.DataFrame())
     @patch('data_processing.consolidate_sites.extract_sites_from_csv')
     @patch('data_processing.consolidate_sites.save_consolidated_data')  # Mock the save function
-    def test_consolidate_sites_no_file_writes(self, mock_save, mock_extract):
+    def test_consolidate_sites_no_file_writes(self, mock_save, mock_extract, mock_fetch_sites):
         """Test that consolidate_sites doesn't write to real files during testing."""
         # Mock extract to return minimal test data
         mock_extract.return_value = pd.DataFrame({

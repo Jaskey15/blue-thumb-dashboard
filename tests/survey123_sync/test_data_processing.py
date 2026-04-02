@@ -74,7 +74,7 @@ class TestSyncModeBehavior(unittest.TestCase):
         processed = pd.DataFrame([{'sample_id': 1, 'Site_Name': 'A'}])
 
         with patch('data_processing.arcgis_sync.fetch_features_edited_since', return_value=records), \
-             patch('data_processing.arcgis_sync.translate_to_pipeline_schema', return_value=pd.DataFrame(records)), \
+             patch('data_processing.arcgis_sync.prepare_dataframe', return_value=pd.DataFrame(records)), \
              patch('data_processing.arcgis_sync.process_fetched_data', return_value=processed), \
              patch('chemical_processor.insert_processed_data_to_db', return_value={'records_inserted': 1}), \
              patch('chemical_processor.classify_active_sites_in_db', return_value={'sites_classified': 1, 'active_count': 1, 'historic_count': 0}):
