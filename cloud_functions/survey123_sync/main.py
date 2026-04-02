@@ -215,6 +215,35 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                 classify_active_sites_in_db,
                 insert_processed_data_to_db,
             )
+            from site_manager import promote_approved_sites, get_pending_site_summary
+
+            # Ensure pending_sites table exists (DB may predate this feature)
+            promote_conn = sqlite3.connect(temp_db.name)
+            try:
+                promote_conn.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_sites (
+                        pending_site_id INTEGER PRIMARY KEY,
+                        site_name TEXT NOT NULL,
+                        latitude REAL,
+                        longitude REAL,
+                        first_seen_date TEXT NOT NULL,
+                        source TEXT DEFAULT 'feature_server',
+                        status TEXT DEFAULT 'pending',
+                        reviewed_date TEXT,
+                        notes TEXT,
+                        nearest_site_name TEXT,
+                        nearest_site_distance_m REAL,
+                        UNIQUE(site_name)
+                    )
+                ''')
+                promote_result = promote_approved_sites(promote_conn)
+                if promote_result['promoted'] > 0:
+                    logger.info(
+                        f"Promoted {promote_result['promoted']} approved sites: "
+                        f"{promote_result['names']}"
+                    )
+            finally:
+                promote_conn.close()
 
             since_date_override, since_datetime_override = _get_feature_server_override(request)
             if since_date_override or since_datetime_override:
@@ -332,17 +361,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             if 'error' in insert_result:
                 raise Exception(f"Database insertion failed: {insert_result['error']}")
 
-            skipped_unknown_site_records = insert_result.get('skipped_records_unknown_sites', 0)
-            unknown_sites = insert_result.get('unknown_sites')
-            unknown_site_counts = insert_result.get('unknown_site_counts') or {}
-            unknown_site_sample_ids = insert_result.get('unknown_site_sample_ids') or {}
-            unknown_site_sample_ids_truncated = bool(
-                insert_result.get('unknown_site_sample_ids_truncated', False)
-            )
-            unknown_site_sample_ids_limit_per_site = insert_result.get(
-                'unknown_site_sample_ids_limit_per_site'
-            )
-
             classification_result = classify_active_sites_in_db(temp_db.name)
             if 'error' in classification_result:
                 logger.warning(f"Site classification failed: {classification_result['error']}")
@@ -351,6 +369,13 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                     f"Site classification updated: {classification_result['active_count']} active, "
                     f"{classification_result['historic_count']} historic"
                 )
+
+            # Query pending site summary before upload (DB gets deleted after)
+            pending_conn = sqlite3.connect(temp_db.name)
+            try:
+                pending_summary = get_pending_site_summary(pending_conn)
+            finally:
+                pending_conn.close()
 
             if not db_manager.upload_database(temp_db.name):
                 raise Exception("Failed to upload updated database")
@@ -363,7 +388,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
-    needs_backfill = bool(skipped_unknown_site_records)
+    needs_backfill = bool(insert_result.get('new_pending'))
     backfill_since_date = None
     if sync_strategy in ('day', 'day_override'):
         backfill_since_date = sync_marker if needs_backfill else None
@@ -385,12 +410,8 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_fetched': len(records),
             'records_processed': len(processed_data),
             'records_inserted': insert_result.get('records_inserted', 0),
-            'skipped_records_unknown_sites': skipped_unknown_site_records,
-            'unknown_sites': unknown_sites or [],
-            'unknown_site_counts': unknown_site_counts,
-            'unknown_site_sample_ids': unknown_site_sample_ids,
-            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
-            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+            'pending_sites_promoted': promote_result.get('promoted', 0),
+            'new_pending_sites': len(insert_result.get('new_pending', [])),
             'needs_backfill': needs_backfill,
             'backfill_since_date': backfill_since_date,
         },
@@ -403,12 +424,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'records_fetched': len(records),
         'records_processed': len(processed_data),
         'records_inserted': insert_result.get('records_inserted', 0),
-        'skipped_records_unknown_sites': skipped_unknown_site_records,
-        'unknown_sites': unknown_sites or [],
-        'unknown_site_counts': unknown_site_counts,
-        'unknown_site_sample_ids': unknown_site_sample_ids,
-        'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
-        'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
         'needs_backfill': needs_backfill,
         'backfill_since_date': backfill_since_date,
         'execution_time': str(datetime.now() - start_time),
@@ -423,6 +438,15 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'active_count': classification_result.get('active_count', 0),
             'historic_count': classification_result.get('historic_count', 0)
         }
+
+    # Add pending sites info to response
+    result['pending_sites'] = {
+        'new_pending': len(insert_result.get('new_pending', [])),
+        'total_pending': pending_summary['total_pending'],
+        'promoted': promote_result.get('promoted', 0),
+        'coordinate_matched': insert_result.get('coordinate_matched', 0),
+        'names': insert_result.get('new_pending', []),
+    }
 
     logger.info(f"FeatureServer sync completed successfully: {result}")
     return result
