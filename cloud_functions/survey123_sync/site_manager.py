@@ -95,7 +95,7 @@ def promote_approved_sites(conn):
     """Move approved pending sites into the sites table.
 
     Args:
-        conn: SQLite connection (caller manages transaction).
+        conn: SQLite connection. Commits its own transaction on success.
 
     Returns:
         Dict with 'promoted' count and 'names' list.

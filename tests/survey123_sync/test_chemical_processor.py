@@ -181,22 +181,17 @@ class TestChemicalProcessor(unittest.TestCase):
     
     @patch('chemical_processor.sqlite3.connect')
     def test_insert_processed_data_to_db_database_error(self, mock_connect):
-        """Test handling of database connection errors."""
-        # Mock database connection error
+        """Test that database connection failure raises (not silently swallowed)."""
         mock_connect.side_effect = Exception("Database connection failed")
-        
+
         processed_data = pd.DataFrame({
             'Site_Name': ['Test Site'],
             'Date': [pd.Timestamp('2023-01-15')],
             'do_percent': [95.5]
         })
-        
-        result = insert_processed_data_to_db(processed_data, '/fake/path/db.sqlite')
-        
-        # Should return error result
-        self.assertEqual(result['records_inserted'], 0)
-        self.assertIn('error', result)
-        self.assertIn('Database connection failed', result['error'])
+
+        with self.assertRaises(Exception, msg="Database connection failed"):
+            insert_processed_data_to_db(processed_data, '/fake/path/db.sqlite')
 
     def test_classify_active_sites_in_db_success(self):
         """Test successful site classification."""
