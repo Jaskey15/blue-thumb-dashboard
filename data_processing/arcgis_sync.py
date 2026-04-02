@@ -188,6 +188,7 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
             'orderByFields': order_by_fields,
             'resultRecordCount': page_size,
             'resultOffset': result_offset,
+            'returnGeometry': 'true',
         }
 
         logger.info(
@@ -212,6 +213,9 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
         for f in features:
             attrs = f.get('attributes') if isinstance(f, dict) else None
             if isinstance(attrs, dict):
+                geom = f.get('geometry') or {}
+                attrs['latitude'] = geom.get('y')
+                attrs['longitude'] = geom.get('x')
                 records.append(attrs)
 
         if not features:
