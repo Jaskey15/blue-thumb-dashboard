@@ -143,6 +143,58 @@ class TestResolveUnknownSite(unittest.TestCase):
         cursor.execute("SELECT site_name FROM pending_sites WHERE site_name = 'No Coords Creek'")
         self.assertIsNotNone(cursor.fetchone())
 
+    def test_normalized_match_returns_site_id(self):
+        """Site matching by normalized name should return existing site_id."""
+        from site_manager import resolve_unknown_site
+
+        existing = self._get_existing_sites()
+        site_lookup = {'Bull Creek: Main': 1, 'Clear Creek: Bridge': 2}
+        # Extra whitespace + trailing period — should normalize to match
+        result = resolve_unknown_site(
+            'Bull  Creek:  Main.', None, None, existing, self.conn,
+            site_lookup=site_lookup,
+        )
+        self.assertEqual(result, 1)
+
+    def test_alias_match_returns_site_id(self):
+        """Site matching via SITE_ALIASES should return existing site_id."""
+        from site_manager import resolve_unknown_site
+
+        existing = self._get_existing_sites()
+        # Add a site that's the canonical name for an alias
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO sites (site_id, site_name, latitude, longitude) "
+            "VALUES (3, 'Cow Creek: West Virginia Avenue', 35.6, -97.3)"
+        )
+        self.conn.commit()
+        site_lookup = {
+            'Bull Creek: Main': 1, 'Clear Creek: Bridge': 2,
+            'Cow Creek: West Virginia Avenue': 3,
+        }
+        # 'cow creek: virginia avenue' is an alias for 'Cow Creek: West Virginia Avenue'
+        result = resolve_unknown_site(
+            'Cow Creek: Virginia Avenue', None, None, existing, self.conn,
+            site_lookup=site_lookup,
+        )
+        self.assertEqual(result, 3)
+
+    def test_coordinate_update_on_conflict(self):
+        """Second insert with coordinates should update a pending site that had None coords."""
+        from site_manager import resolve_unknown_site
+
+        existing = self._get_existing_sites()
+        # First: no coordinates
+        resolve_unknown_site('New Creek', None, None, existing, self.conn)
+        # Second: with coordinates
+        resolve_unknown_site('New Creek', 36.5, -96.5, existing, self.conn)
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT latitude, longitude FROM pending_sites WHERE site_name = 'New Creek'")
+        row = cursor.fetchone()
+        self.assertAlmostEqual(row[0], 36.5)
+        self.assertAlmostEqual(row[1], -96.5)
+
 
 class TestPromoteApprovedSites(unittest.TestCase):
     """Test promote_approved_sites function."""

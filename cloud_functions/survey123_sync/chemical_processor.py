@@ -127,7 +127,8 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                     lat = row.get('latitude') if has_coords else None
                     lon = row.get('longitude') if has_coords else None
                     resolved_id = resolve_unknown_site(
-                        site_name, lat, lon, coord_rows, conn
+                        site_name, lat, lon, coord_rows, conn,
+                        site_lookup=site_lookup,
                     )
                     resolved_cache[site_name] = resolved_id
                     if resolved_id is not None:

@@ -2,7 +2,8 @@
 Site lifecycle management for cloud sync.
 
 Handles two responsibilities:
-1. Resolving unknown sites encountered during sync (Haversine dedup + pending staging)
+1. Resolving unknown sites encountered during sync
+   (normalized name → alias → Haversine coords → pending staging)
 2. Promoting approved pending sites to the active sites table
 """
 
@@ -20,6 +21,10 @@ if (
 ):
     sys.path.insert(0, _candidate_root)
 
+from data_processing.chemical_utils import (
+    SITE_ALIASES,
+    normalize_site_name,
+)
 from data_processing.merge_sites import haversine_m
 
 logger = logging.getLogger(__name__)
@@ -27,12 +32,15 @@ logger = logging.getLogger(__name__)
 DISTANCE_THRESHOLD_M = 50.0
 
 
-def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn):
+def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn,
+                         site_lookup=None):
     """Resolve an unknown site name against existing sites.
 
-    Checks if the unknown site is a coordinate duplicate of an existing site
-    (within 50m). If so, returns the existing site_id. Otherwise, stages the
-    site in pending_sites and returns None.
+    Resolution chain:
+    1. Normalized name match (casefold + whitespace normalization)
+    2. Alias lookup via SITE_ALIASES
+    3. Haversine coordinate match (within 50m)
+    4. Stage to pending_sites if all else fails
 
     Args:
         site_name: The unknown site name.
@@ -40,10 +48,39 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn):
         longitude: Longitude from FeatureServer geometry (may be None).
         existing_sites: List of (site_id, site_name, lat, lon) tuples from sites table.
         conn: SQLite connection (caller manages transaction).
+        site_lookup: Optional dict of {site_name: site_id} for name-based resolution.
 
     Returns:
-        site_id if coordinate-matched to an existing site, None if staged as pending.
+        site_id if resolved, None if staged as pending.
     """
+    # Step 1: Normalized name match
+    if site_lookup:
+        normalized_key = normalize_site_name(site_name).casefold()
+        for db_name, db_id in site_lookup.items():
+            if normalize_site_name(db_name).casefold() == normalized_key:
+                logger.info(
+                    f"Normalized match: '{site_name}' -> '{db_name}' (site_id={db_id})"
+                )
+                return db_id
+
+        # Step 2: Alias lookup
+        canonical_name = SITE_ALIASES.get(normalized_key)
+        if canonical_name:
+            site_id = site_lookup.get(canonical_name)
+            if site_id is None:
+                # Try normalized lookup of canonical name
+                canonical_norm = normalize_site_name(canonical_name).casefold()
+                for db_name, db_id in site_lookup.items():
+                    if normalize_site_name(db_name).casefold() == canonical_norm:
+                        site_id = db_id
+                        break
+            if site_id is not None:
+                logger.info(
+                    f"Alias match: '{site_name}' -> '{canonical_name}' (site_id={site_id})"
+                )
+                return site_id
+
+    # Step 3: Haversine coordinate match
     nearest_name = None
     nearest_dist = float('inf')
 
@@ -62,15 +99,20 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn):
                 nearest_dist = dist
                 nearest_name = existing_name
 
-    # No coordinate match — stage as pending
+    # Step 4: Stage as pending
     cursor = conn.cursor()
     today = datetime.now().strftime('%Y-%m-%d')
     cursor.execute(
         """
-        INSERT OR IGNORE INTO pending_sites
+        INSERT INTO pending_sites
             (site_name, latitude, longitude, first_seen_date, source, status,
              nearest_site_name, nearest_site_distance_m)
         VALUES (?, ?, ?, ?, 'feature_server', 'pending', ?, ?)
+        ON CONFLICT(site_name) DO UPDATE SET
+            latitude = COALESCE(excluded.latitude, pending_sites.latitude),
+            longitude = COALESCE(excluded.longitude, pending_sites.longitude),
+            nearest_site_name = excluded.nearest_site_name,
+            nearest_site_distance_m = excluded.nearest_site_distance_m
         """,
         (
             site_name,

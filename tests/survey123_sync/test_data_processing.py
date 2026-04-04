@@ -109,6 +109,25 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
             """
         )
 
+        cur.execute(
+            """
+            CREATE TABLE pending_sites (
+                pending_site_id INTEGER PRIMARY KEY,
+                site_name TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                first_seen_date TEXT NOT NULL,
+                source TEXT DEFAULT 'feature_server',
+                status TEXT DEFAULT 'pending',
+                reviewed_date TEXT,
+                notes TEXT,
+                nearest_site_name TEXT,
+                nearest_site_distance_m REAL,
+                UNIQUE(site_name)
+            )
+            """
+        )
+
         conn.commit()
         conn.close()
         return path
@@ -146,8 +165,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -192,8 +210,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -238,8 +255,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -284,8 +300,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -330,8 +345,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -376,8 +390,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 1)
-            self.assertEqual(result['skipped_records_unknown_sites'], 0)
-            self.assertEqual(result['unknown_sites'], [])
+            self.assertNotIn('new_pending', result)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
@@ -411,12 +424,8 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
             self.assertEqual(result['records_inserted'], 0)
-            self.assertEqual(result['skipped_records_unknown_sites'], 1)
-            self.assertEqual(result['unknown_sites'], ['Definitely Not A Real Site'])
-            self.assertEqual(result['unknown_site_counts'], {'Definitely Not A Real Site': 1})
-            self.assertEqual(result['unknown_site_sample_ids'], {'Definitely Not A Real Site': [9999]})
-            self.assertEqual(result['unknown_site_sample_ids_truncated'], False)
-            self.assertEqual(result['unknown_site_sample_ids_limit_per_site'], 50)
+            self.assertIn('new_pending', result)
+            self.assertIn('Definitely Not A Real Site', result['new_pending'])
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
