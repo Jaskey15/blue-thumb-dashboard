@@ -17,7 +17,7 @@ python app.py    # http://127.0.0.1:8050
 
 ## Architecture Decisions
 
-- **Three active chemical data pathways** — `chemical_processing.py` (original CSV), `updated_chemical_processing.py` (range-based CSV), and `arcgis_sync.py` (real-time FeatureServer). All share `chemical_utils.py`. These are NOT versions of each other — they handle different data formats.
+- **Two active chemical data pathways** — `chemical_processing.py` (legacy single-value CSV for pre-2020 data) and `arcgis_sync.py` (API-first pipeline fetching from ArcGIS Feature Server for current-period data). Both share `chemical_utils.py`. These are NOT versions of each other — different data formats, different collection periods.
 - **GCS-backed database on Cloud Run** — DB downloaded from GCS at startup, background thread polls for updates. Docker-baked DB is fallback only.
 - **`data_queries.py` is the primary retrieval interface** — callbacks and visualizations query through this module. Exception: `map_queries.py` for map-specific queries.
 

@@ -12,7 +12,7 @@ from data_processing.consolidate_sites import verify_cleaned_csvs, consolidate_s
 from data_processing.site_processing import process_site_data, classify_active_sites, cleanup_unused_sites
 from data_processing.merge_sites import merge_duplicate_sites
 from data_processing.chemical_processing import load_chemical_data_to_db
-from data_processing.updated_chemical_processing import load_updated_chemical_data_to_db
+from data_processing.arcgis_sync import sync_all_chemical_data
 from data_processing.fish_processing import load_fish_data
 from data_processing.macro_processing import load_macroinvertebrate_data
 from data_processing.habitat_processing import load_habitat_data
@@ -160,15 +160,18 @@ def reload_all_data():
             logger.error(f"Chemical data loading failed: {e}")
             return False
         
-        # Step 7: Load updated chemical data
+        # Step 7: Load current-period chemical data from Feature Server
         try:
-            updated_result = load_updated_chemical_data_to_db()
-            if updated_result:
-                logger.info("Updated chemical data loaded successfully")
+            updated_result = sync_all_chemical_data()
+            if updated_result.get('status') == 'success':
+                logger.info(
+                    f"Feature Server chemical data loaded: "
+                    f"{updated_result.get('records_inserted', 0)} measurements inserted"
+                )
             else:
-                logger.warning("Updated chemical data loading had issues, but continuing...")
+                logger.warning("Feature Server chemical data loading had issues, but continuing...")
         except Exception as e:
-            logger.error(f"Updated chemical data loading failed: {e}")
+            logger.error(f"Feature Server chemical data loading failed: {e}")
             return False
         
         # Step 8: Load fish data

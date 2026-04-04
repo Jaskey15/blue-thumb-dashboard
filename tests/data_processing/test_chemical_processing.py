@@ -26,17 +26,16 @@ from data_processing.chemical_utils import (
     remove_empty_chemical_rows,
     validate_chemical_data,
 )
-from data_processing.updated_chemical_processing import (
+from data_processing.arcgis_sync import (
     format_to_database_schema,
     get_conditional_nutrient_value,
     get_greater_value,
     get_ph_worst_case,
-    parse_sampling_dates,
+    parse_epoch_dates,
+    prepare_dataframe,
     process_conditional_nutrient,
     process_simple_nutrients,
-    process_updated_chemical_data,
 )
-from data_processing.arcgis_sync import translate_to_pipeline_schema
 from data_processing.chemical_utils import insert_collection_event
 from utils import setup_logging
 
@@ -87,28 +86,28 @@ class TestChemicalProcessing(unittest.TestCase):
             }
         }
         
-        # Sample updated chemical data for testing
+        # Sample updated chemical data for testing (API field names)
         self.sample_updated_data = pd.DataFrame({
-            'Site Name': ['Test Site 1', 'Test Site 2'],
-            'Sampling Date': ['5/15/2023, 10:30 AM', '6/20/2023, 2:15 PM'],
-            '% Oxygen Saturation': [95.5, 110.2],
-            'pH #1': [7.2, 8.1],
-            'pH #2': [7.3, 8.0],
-            'Nitrate #1': [0.5, 1.2],
-            'Nitrate #2': [0.6, 1.1],
-            'Nitrite #1': [0.05, 0.1],
-            'Nitrite #2': [0.04, 0.12],
-            'Ammonia Nitrogen Range Selection': ['Low', 'Mid'],
-            'Ammonia Nitrogen Low Reading #1': [0.1, 0.3],
-            'Ammonia Nitrogen Low Reading #2': [0.12, 0.28],
+            'SiteName': ['Test Site 1', 'Test Site 2'],
+            'day': [1684137000000, 1687266900000],  # 2023-05-15, 2023-06-20 epoch ms
+            'oxygen_sat': [95.5, 110.2],
+            'pH1': [7.2, 8.1],
+            'pH2': [7.3, 8.0],
+            'nitratetest1': [0.5, 1.2],
+            'nitratetest2': [0.6, 1.1],
+            'nitritetest1': [0.05, 0.1],
+            'nitritetest2': [0.04, 0.12],
+            'Ammonia_Range': ['Low', 'Mid'],
+            'ammonia_Nitrogen2': [0.1, 0.3],
+            'ammonia_Nitrogen3': [0.12, 0.28],
             'Ammonia_nitrogen_midrange1_Final': [0.2, 0.4],
             'Ammonia_nitrogen_midrange2_Final': [0.22, 0.38],
-            'Orthophosphate Range Selection': ['Low', 'High'],
+            'Ortho_Range': ['Low', 'High'],
             'Orthophosphate_Low1_Final': [0.02, 0.15],
             'Orthophosphate_Low2_Final': [0.03, 0.14],
             'Orthophosphate_High1_Final': [0.1, 0.5],
             'Orthophosphate_High2_Final': [0.12, 0.48],
-            'Chloride Range Selection': ['Low', 'High'],
+            'Chloride_Range': ['Low', 'High'],
             'Chloride_Low1_Final': [25.0, 45.0],
             'Chloride_Low2_Final': [26.0, 44.0],
             'Chloride_High1_Final': [250.0, 280.0],
@@ -228,96 +227,59 @@ class TestChemicalProcessing(unittest.TestCase):
     # UPDATED PROCESSING FUNCTION TESTS
     # =============================================================================
 
-    def test_parse_sampling_dates(self):
-        """Test parsing of sampling dates from datetime strings."""
-        # Create test data with datetime strings
+    def test_parse_epoch_dates(self):
+        """Test parsing of epoch ms dates."""
+        # 2023-05-15 10:30 UTC in epoch ms
         test_df = pd.DataFrame({
-            'Sampling Date': [
-                '5/15/2023, 10:30 AM',
-                '6/20/2023, 2:15 PM',
-                '7/10/2023, 9:45 AM'
-            ]
+            'day': [1684137000000, 1687266900000, 1688982300000]
         })
-        
-        result_df = parse_sampling_dates(test_df)
-        
+
+        result_df = parse_epoch_dates(test_df)
+
         # Check that Date column was created
         self.assertIn('Date', result_df.columns)
-        
+
         # Check that dates were parsed correctly
-        self.assertEqual(result_df['Date'].dt.year.iloc[0], 2023)
-        self.assertEqual(result_df['Date'].dt.month.iloc[0], 5)
-        self.assertEqual(result_df['Date'].dt.day.iloc[0], 15)
-        
+        self.assertEqual(result_df['Year'].iloc[0], 2023)
+        self.assertEqual(result_df['Month'].iloc[0], 5)
+
         # Check that Year and Month columns were added
         self.assertIn('Year', result_df.columns)
         self.assertIn('Month', result_df.columns)
-        
-        # Check that intermediate column was removed
-        self.assertNotIn('parsed_datetime', result_df.columns)
 
-    def test_translate_to_pipeline_schema_normalizes_site_and_sets_sample_id(self):
-        """ArcGIS translation should normalize whitespace and carry objectid as sample_id."""
+    def test_prepare_dataframe_normalizes_site_and_sets_sample_id(self):
+        """prepare_dataframe should normalize whitespace and carry objectid as sample_id."""
         record = {
             'objectid': 123456,
             'SiteName': 'Wolf Creek:  McMahon Soccer Park',
-            'day': 1737374400000,  # 2025-01-20 12:00:00 UTC
+            'day': 1737374400000,
             'oxygen_sat': 95.5,
             'pH1': 7.2,
             'pH2': 7.5,
-            'nitratetest1': 0.5,
-            'nitratetest2': 0.6,
-            'nitritetest1': 0.05,
-            'nitritetest2': 0.04,
-            'Ammonia_Range': 'Low',
-            'ammonia_Nitrogen2': 0.1,
-            'ammonia_Nitrogen3': 0.12,
-            'Ammonia_nitrogen_midrange1_Final': None,
-            'Ammonia_nitrogen_midrange2_Final': None,
-            'Ortho_Range': 'Low',
-            'Orthophosphate_Low1_Final': 0.02,
-            'Orthophosphate_Low2_Final': 0.03,
-            'Orthophosphate_Mid1_Final': None,
-            'Orthophosphate_Mid2_Final': None,
-            'Orthophosphate_High1_Final': None,
-            'Orthophosphate_High2_Final': None,
-            'Chloride_Range': 'Low',
-            'Chloride_Low1_Final': 25.0,
-            'Chloride_Low2_Final': 26.0,
-            'Chloride_High1_Final': None,
-            'Chloride_High2_Final': None,
             'QAQC_Complete': 'X',
         }
 
-        df = translate_to_pipeline_schema([record])
+        df = prepare_dataframe([record])
         self.assertEqual(len(df), 1)
         self.assertIn('sample_id', df.columns)
         self.assertEqual(df.loc[0, 'sample_id'], 123456)
-        self.assertEqual(df.loc[0, 'Site Name'], 'Wolf Creek: McMahon Soccer Park')
-        self.assertIn('Sampling Date', df.columns)
-
-        parsed = parse_sampling_dates(df.copy())
-        self.assertIn('Date', parsed.columns)
-        self.assertIn('Year', parsed.columns)
-        self.assertIn('Month', parsed.columns)
-        self.assertIn('sample_id', parsed.columns)
+        self.assertEqual(df.loc[0, 'SiteName'], 'Wolf Creek: McMahon Soccer Park')
 
     def test_format_to_database_schema_preserves_sample_id(self):
         """When sample_id is present, it should be retained in formatted output."""
         test_df = pd.DataFrame({
-            'Site Name': ['Test Site'],
+            'SiteName': ['Test Site'],
             'Date': [pd.Timestamp('2025-01-20')],
             'Year': [2025],
             'Month': [1],
-            '% Oxygen Saturation': [95.5],
-            'pH #1': [7.2],
-            'pH #2': [7.5],
+            'oxygen_sat': [95.5],
+            'pH1': [7.2],
+            'pH2': [7.5],
             'Nitrate': [0.6],
             'Nitrite': [0.05],
             'Ammonia': [0.12],
             'Orthophosphate': [0.03],
             'Chloride': [26.0],
-            'soluble_nitrogen': [0.77],
             'sample_id': [123456],
         })
 
@@ -389,28 +351,28 @@ class TestChemicalProcessing(unittest.TestCase):
 
     def test_get_ph_worst_case(self):
         """Test logic for selecting pH value furthest from neutral."""
-        # Test case where pH #2 is further from 7 (more acidic)
-        row1 = pd.Series({'pH #1': 7.5, 'pH #2': 6.0})
+        # Test case where pH2 is further from 7 (more acidic)
+        row1 = pd.Series({'pH1': 7.5, 'pH2': 6.0})
         self.assertEqual(get_ph_worst_case(row1), 6.0)
 
-        # Test case where pH #1 is further from 7 (more basic)
-        row2 = pd.Series({'pH #1': 8.5, 'pH #2': 7.2})
+        # Test case where pH1 is further from 7 (more basic)
+        row2 = pd.Series({'pH1': 8.5, 'pH2': 7.2})
         self.assertEqual(get_ph_worst_case(row2), 8.5)
 
-        # Test case with equidistant values (prefers pH #1 as tie-breaker)
-        row3 = pd.Series({'pH #1': 6.0, 'pH #2': 8.0})
+        # Test case with equidistant values (prefers pH1 as tie-breaker)
+        row3 = pd.Series({'pH1': 6.0, 'pH2': 8.0})
         self.assertEqual(get_ph_worst_case(row3), 6.0)
 
         # Test case with one null value
-        row4 = pd.Series({'pH #1': 7.8, 'pH #2': np.nan})
+        row4 = pd.Series({'pH1': 7.8, 'pH2': np.nan})
         self.assertEqual(get_ph_worst_case(row4), 7.8)
 
         # Test case with both null values
-        row5 = pd.Series({'pH #1': None, 'pH #2': None})
+        row5 = pd.Series({'pH1': None, 'pH2': None})
         self.assertIsNone(get_ph_worst_case(row5))
 
         # Test case with invalid string data
-        row6 = pd.Series({'pH #1': 'invalid', 'pH #2': 7.9})
+        row6 = pd.Series({'pH1': 'invalid', 'pH2': 7.9})
         self.assertEqual(get_ph_worst_case(row6), 7.9)
 
     def test_get_greater_value(self):
@@ -492,11 +454,11 @@ class TestChemicalProcessing(unittest.TestCase):
 
     def test_process_conditional_nutrient(self):
         """Test processing of conditional nutrients."""
-        # Create test data with ammonia readings
+        # Create test data with ammonia readings (API field names)
         test_df = pd.DataFrame({
-            'Ammonia Nitrogen Range Selection': ['Low', 'Mid', 'Low', 'Invalid'], 
-            'Ammonia Nitrogen Low Reading #1': [0.1, 0.2, 0.3, 0.4],
-            'Ammonia Nitrogen Low Reading #2': [0.12, 0.22, 0.32, 0.42],
+            'Ammonia_Range': ['Low', 'Mid', 'Low', 'Invalid'],
+            'ammonia_Nitrogen2': [0.1, 0.2, 0.3, 0.4],
+            'ammonia_Nitrogen3': [0.12, 0.22, 0.32, 0.42],
             'Ammonia_nitrogen_midrange1_Final': [0.2, 0.3, 0.4, 0.5],
             'Ammonia_nitrogen_midrange2_Final': [0.22, 0.32, 0.42, 0.52]
         })
@@ -511,12 +473,12 @@ class TestChemicalProcessing(unittest.TestCase):
 
     def test_process_simple_nutrients(self):
         """Test processing of simple nutrients (Nitrate, Nitrite)."""
-        # Create test data
+        # Create test data (API field names)
         test_df = pd.DataFrame({
-            'Nitrate #1': [0.5, 1.0, 0.0],
-            'Nitrate #2': [0.6, 0.9, 0.0],
-            'Nitrite #1': [0.05, 0.1, 0.0],
-            'Nitrite #2': [0.04, 0.12, 0.0]
+            'nitratetest1': [0.5, 1.0, 0.0],
+            'nitratetest2': [0.6, 0.9, 0.0],
+            'nitritetest1': [0.05, 0.1, 0.0],
+            'nitritetest2': [0.04, 0.12, 0.0]
         })
         
         result_df = process_simple_nutrients(test_df)
@@ -529,37 +491,37 @@ class TestChemicalProcessing(unittest.TestCase):
 
     def test_format_to_database_schema(self):
         """Test formatting of data to match database schema."""
-        # Create test data
+        # Create test data (API field names)
         test_df = pd.DataFrame({
-            'Site Name': ['Site1', 'Site2', 'Site3'],
+            'SiteName': ['Site1', 'Site2', 'Site3'],
             'Date': pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-03']),
             'Year': [2023, 2023, 2023],
             'Month': [1, 1, 1],
-            '% Oxygen Saturation': [95.5, 88.0, 90.0],
-            'pH #1': [7.2, 6.8, 8.0],
-            'pH #2': [7.5, 6.5, 6.0],
+            'oxygen_sat': [95.5, 88.0, 90.0],
+            'pH1': [7.2, 6.8, 8.0],
+            'pH2': [7.5, 6.5, 6.0],
             'Nitrate': [0.5, 1.2, 0.8],
             'Nitrite': [0.05, 0.1, 0.2],
             'Ammonia': [0.1, 0.3, 0.4],
             'Orthophosphate': [0.02, 0.15, 0.1],
             'Chloride': [25.0, 45.0, 30.0]
         })
-        
+
         result_df = format_to_database_schema(test_df)
-        
+
         # Check column renaming
         self.assertIn('Site_Name', result_df.columns)
         self.assertIn('do_percent', result_df.columns)
         self.assertIn('Phosphorus', result_df.columns)
-        
+
         # Check pH calculation (worst case)
         self.assertEqual(result_df['pH'].iloc[0], 7.5)  # 7.5 is further from 7 than 7.2
         self.assertEqual(result_df['pH'].iloc[1], 6.5)  # 6.5 is further from 7 than 6.8
-        self.assertEqual(result_df['pH'].iloc[2], 8.0)  # Equidistant, should prefer pH #1
-        
+        self.assertEqual(result_df['pH'].iloc[2], 8.0)  # Equidistant, should prefer pH1
+
         # Check that soluble nitrogen was calculated
         self.assertIn('soluble_nitrogen', result_df.columns)
-        
+
         # Check that all required columns are present
         required_columns = [
             'Site_Name', 'Date', 'Year', 'Month', 'do_percent', 'pH',
@@ -618,34 +580,6 @@ class TestChemicalProcessing(unittest.TestCase):
         
         # Check that reference values were returned
         self.assertIsInstance(ref_values, dict)
-
-    @patch('data_processing.updated_chemical_processing.load_updated_chemical_data')
-    def test_updated_processing_pipeline(self, mock_load_data):
-        """Test the complete updated chemical processing pipeline."""
-        # Mock data loading
-        mock_load_data.return_value = self.sample_updated_data.copy()
-        
-        # Process the data
-        result_df = process_updated_chemical_data()
-        
-        # Check that data was processed
-        self.assertFalse(result_df.empty)
-        
-        # Check that all required columns are present
-        required_columns = [
-            'Site_Name', 'Date', 'Year', 'Month', 'do_percent', 'pH',
-            'Nitrate', 'Nitrite', 'Ammonia', 'Phosphorus', 'Chloride',
-            'soluble_nitrogen'
-        ]
-        for col in required_columns:
-            self.assertIn(col, result_df.columns)
-        
-        # Check that values were processed correctly
-        self.assertEqual(result_df['do_percent'].iloc[0], 95.5)
-        self.assertEqual(result_df['pH'].iloc[0], 7.3)  # pH #2 is further from 7 (7.3 vs 7.2)
-        self.assertEqual(result_df['pH'].iloc[1], 8.1)  # pH #1 is further from 7 (8.1 vs 8.0)
-        self.assertEqual(result_df['Nitrate'].iloc[0], 0.6)  # Greater of 0.5 and 0.6
-        self.assertEqual(result_df['Nitrite'].iloc[1], 0.12)  # Greater of 0.1 and 0.12
 
     # =============================================================================
     # EDGE CASES

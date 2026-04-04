@@ -6,8 +6,8 @@ preserving all associated monitoring data by transferring it to a single,
 preferred site record.
 
 The preferred site is determined using a priority system:
-1. Sites present in the `updated_chemical_data` source file.
-2. Sites present in the `chemical_data` source file.
+1. Sites present in the Feature Server (current chemical data source).
+2. Sites present in the legacy `chemical_data` CSV.
 3. The site with the longest name (as a fallback).
 """
 
@@ -23,16 +23,22 @@ from database.database import close_connection, get_connection
 
 logger = setup_logging("merge_sites", category="processing")
 
-def load_csv_files():
-    """Loads cleaned source CSVs to check for site name existence."""
+def load_reference_data(conn):
+    """Loads reference data for site name priority resolution.
+
+    Feature Server sites are queried from the DB (already loaded by
+    consolidate_sites). Legacy chemical CSV is read from interim directory.
+    """
     base_dir = os.path.dirname(os.path.dirname(__file__))
-    
-    # Load cleaned CSVs from the interim directory for reference.
+
     site_data = pd.read_csv(os.path.join(base_dir, 'data', 'interim', 'cleaned_site_data.csv'))
-    updated_chemical = pd.read_csv(os.path.join(base_dir, 'data', 'interim', 'cleaned_updated_chemical_data.csv'))
     chemical_data = pd.read_csv(os.path.join(base_dir, 'data', 'interim', 'cleaned_chemical_data.csv'))
-    
-    return site_data, updated_chemical, chemical_data
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT site_name FROM sites WHERE source_file = 'arcgis_feature_server'")
+    feature_server_sites = {row[0] for row in cursor.fetchall()}
+
+    return site_data, feature_server_sites, chemical_data
 
 def find_duplicate_coordinate_groups(conn=None, distance_threshold_m=50.0):
     """Find candidate duplicate sites by Haversine distance clustering.
@@ -171,12 +177,11 @@ def analyze_coordinate_duplicates(distance_threshold_m=50.0):
     logger.info("Analyzing coordinate duplicates...")
 
     try:
-        site_data_df, updated_chemical_df, chemical_data_df = load_csv_files()
+        conn = get_connection()
+        site_data_df, feature_server_sites, chemical_data_df = load_reference_data(conn)
 
-        updated_chemical_sites = set(updated_chemical_df['Site Name'].apply(clean_site_name))
         chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
 
-        conn = get_connection()
         duplicate_groups_df = find_duplicate_coordinate_groups(
             conn,
             distance_threshold_m=distance_threshold_m,
@@ -200,7 +205,7 @@ def analyze_coordinate_duplicates(distance_threshold_m=50.0):
             sites_in_group = list(group['site_name'])
 
             preferred_site, _, reason = determine_preferred_site(
-                group, updated_chemical_sites, chemical_data_sites
+                group, feature_server_sites, chemical_data_sites
             )
 
             coordinates = f"(group_id={group_key})"
@@ -230,7 +235,7 @@ def analyze_coordinate_duplicates(distance_threshold_m=50.0):
         logger.error(f"Error analyzing coordinate duplicates: {e}")
         return None
 
-def determine_preferred_site(group, updated_chemical_sites, chemical_data_sites):
+def determine_preferred_site(group, feature_server_sites, chemical_data_sites):
     """
     Determines which site to keep from a group of duplicates.
 
@@ -239,24 +244,24 @@ def determine_preferred_site(group, updated_chemical_sites, chemical_data_sites)
     """
     if group.empty:
         return None, [], "Empty group"
-    
-    sites_in_updated = group[group['site_name'].isin(updated_chemical_sites)]
+
+    sites_in_fs = group[group['site_name'].isin(feature_server_sites)]
     sites_in_chemical = group[group['site_name'].isin(chemical_data_sites)]
-    
-    # Priority 1: Site exists in the `updated_chemical` source file.
-    if len(sites_in_updated) > 1:
+
+    # Priority 1: Site exists in the Feature Server (current data source).
+    if len(sites_in_fs) > 1:
         # If multiple, prefer the one with the longest name.
-        max_idx = sites_in_updated['site_name'].str.len().idxmax()
-        preferred_site = sites_in_updated.loc[max_idx]
+        max_idx = sites_in_fs['site_name'].str.len().idxmax()
+        preferred_site = sites_in_fs.loc[max_idx]
         sites_to_merge = group[group['site_id'] != preferred_site['site_id']].to_dict('records')
-        return preferred_site, sites_to_merge, "Multiple in updated_chemical - keeping longer name"
-    
-    elif len(sites_in_updated) == 1:
-        preferred_site = sites_in_updated.iloc[0]
+        return preferred_site, sites_to_merge, "Multiple in feature_server - keeping longer name"
+
+    elif len(sites_in_fs) == 1:
+        preferred_site = sites_in_fs.iloc[0]
         sites_to_merge = group[group['site_id'] != preferred_site['site_id']].to_dict('records')
-        return preferred_site, sites_to_merge, "Found in updated_chemical"
-    
-    # Priority 2: Site exists in the `chemical_data` source file.
+        return preferred_site, sites_to_merge, "Found in feature_server"
+
+    # Priority 2: Site exists in the legacy `chemical_data` CSV.
     elif len(sites_in_chemical) > 0:
         if len(sites_in_chemical) > 1:
             max_idx = sites_in_chemical['site_name'].str.len().idxmax()
@@ -386,7 +391,6 @@ def update_csv_files_with_mapping(site_mapping):
     # Define CSV files and their site name columns
     csv_configs = [
         {'file': 'cleaned_chemical_data.csv', 'site_column': 'SiteName'},
-        {'file': 'cleaned_updated_chemical_data.csv', 'site_column': 'Site Name'},
         {'file': 'cleaned_fish_data.csv', 'site_column': 'SiteName'},
         {'file': 'cleaned_macro_data.csv', 'site_column': 'SiteName'},
         {'file': 'cleaned_habitat_data.csv', 'site_column': 'SiteName'},
@@ -456,13 +460,11 @@ def merge_duplicate_sites(distance_threshold_m=50.0):
     logger.info("Starting coordinate-based site merge process...")
 
     try:
-        site_data_df, updated_chemical_df, chemical_data_df = load_csv_files()
-
-        updated_chemical_sites = set(updated_chemical_df['Site Name'].apply(clean_site_name))
-        chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
-
         conn = get_connection()
         cursor = conn.cursor()
+
+        site_data_df, feature_server_sites, chemical_data_df = load_reference_data(conn)
+        chemical_data_sites = set(chemical_data_df['SiteName'].apply(clean_site_name))
 
         duplicate_groups_df = find_duplicate_coordinate_groups(
             conn,
@@ -480,7 +482,7 @@ def merge_duplicate_sites(distance_threshold_m=50.0):
 
                 for _, group in duplicate_groups_df.groupby('group_id'):
                     preferred_site, sites_to_merge, reason = determine_preferred_site(
-                        group, updated_chemical_sites, chemical_data_sites
+                        group, feature_server_sites, chemical_data_sites
                     )
 
                     if not preferred_site is None and sites_to_merge:
