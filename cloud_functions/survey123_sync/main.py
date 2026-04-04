@@ -336,6 +336,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             unknown_sites = insert_result.get('unknown_sites')
             unknown_site_counts = insert_result.get('unknown_site_counts') or {}
             unknown_site_sample_ids = insert_result.get('unknown_site_sample_ids') or {}
+            unknown_site_coordinates = insert_result.get('unknown_site_coordinates') or {}
             unknown_site_sample_ids_truncated = bool(
                 insert_result.get('unknown_site_sample_ids_truncated', False)
             )
@@ -389,6 +390,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'unknown_sites': unknown_sites or [],
             'unknown_site_counts': unknown_site_counts,
             'unknown_site_sample_ids': unknown_site_sample_ids,
+            'unknown_site_coordinates': unknown_site_coordinates,
             'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
             'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
             'needs_backfill': needs_backfill,
@@ -407,6 +409,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'unknown_sites': unknown_sites or [],
         'unknown_site_counts': unknown_site_counts,
         'unknown_site_sample_ids': unknown_site_sample_ids,
+        'unknown_site_coordinates': unknown_site_coordinates,
         'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
         'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
         'needs_backfill': needs_backfill,
@@ -428,6 +431,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
     return result
 
 
+@functions_framework.http
 def survey123_daily_sync(request):
     """
     Cloud Function entry point for daily FeatureServer data sync.

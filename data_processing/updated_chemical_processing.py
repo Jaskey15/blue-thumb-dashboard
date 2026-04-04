@@ -314,7 +314,10 @@ def format_to_database_schema(df):
                            'soluble_nitrogen']
         if has_sample_id:
             required_columns.append('sample_id')
-        
+        for geo_col in ('_geometry_x', '_geometry_y'):
+            if geo_col in formatted_df.columns:
+                required_columns.append(geo_col)
+
         formatted_df = formatted_df[required_columns]
         
         # Ensure all final data columns are in a numeric format.

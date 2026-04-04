@@ -142,17 +142,19 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         unknown_sites = set()
         unknown_site_counts: Dict[str, int] = {}
         unknown_site_sample_ids: Dict[str, Any] = {}
+        unknown_site_coordinates: Dict[str, Any] = {}
         unknown_site_sample_ids_truncated = False
         unknown_site_sample_ids_limit_per_site = 50
         has_sample_id = 'sample_id' in df.columns
-        
+        has_geometry = '_geometry_x' in df.columns and '_geometry_y' in df.columns
+
         for _, row in df.iterrows():
             site_name = row['Site_Name']
-            
+
             site_id, site_name = _resolve_site(
-                site_name, 
-                site_lookup, 
-                normalized_site_lookup, 
+                site_name,
+                site_lookup,
+                normalized_site_lookup,
                 SITE_ALIASES
             )
 
@@ -162,12 +164,28 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                 skipped_records_unknown_sites += 1
                 unknown_site_counts[site_name_str] = unknown_site_counts.get(site_name_str, 0) + 1
 
-                # Finding #5: Check if this was an alias that failed to resolve
+                # Check if this was an alias that failed to resolve
                 normalized_key = normalize_site_name(site_name).casefold()
                 if normalized_key in SITE_ALIASES:
                     logger.warning(f"Alias mismatch: Site '{site_name}' matched alias '{SITE_ALIASES[normalized_key]}', but canonical name not found in database - skipping")
                 else:
                     logger.warning(f"Site '{site_name}' not found in database - skipping")
+
+                # Capture geometry so operators can add the missing site.
+                # Coordinates come from _geometry_x/_geometry_y injected by
+                # _fetch_features_paginated when return_geometry=True.
+                if has_geometry and site_name_str not in unknown_site_coordinates:
+                    lat = row.get('_geometry_y')
+                    lon = row.get('_geometry_x')
+                    if lat is not None and pd.notna(lat) and lon is not None and pd.notna(lon):
+                        unknown_site_coordinates[site_name_str] = {
+                            'latitude': float(lat),
+                            'longitude': float(lon),
+                        }
+                        logger.warning(
+                            f"Unknown site coordinates: '{site_name_str}' "
+                            f"lat={float(lat):.6f} lon={float(lon):.6f}"
+                        )
 
                 if has_sample_id:
                     raw_sample_id = row.get('sample_id')
@@ -244,6 +262,7 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
             'unknown_sites': sorted(unknown_sites),
             'unknown_site_counts': dict(sorted(unknown_site_counts.items())),
             'unknown_site_sample_ids': dict(sorted(unknown_site_sample_ids.items())),
+            'unknown_site_coordinates': dict(sorted(unknown_site_coordinates.items())),
             'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
             'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
         }
