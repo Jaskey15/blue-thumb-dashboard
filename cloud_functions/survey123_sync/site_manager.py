@@ -137,7 +137,7 @@ def promote_approved_sites(conn):
     """Move approved pending sites into the sites table.
 
     Args:
-        conn: SQLite connection. Commits its own transaction on success.
+        conn: SQLite connection. Caller is responsible for committing.
 
     Returns:
         Dict with 'promoted' count and 'names' list.
@@ -167,7 +167,6 @@ def promote_approved_sites(conn):
             "WHERE status = 'approved'",
             (datetime.now().strftime('%Y-%m-%d'),),
         )
-        conn.commit()
 
     return {'promoted': len(promoted_names), 'names': promoted_names}
 

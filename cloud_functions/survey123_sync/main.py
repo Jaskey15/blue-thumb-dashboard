@@ -237,6 +237,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                     )
                 ''')
                 promote_result = promote_approved_sites(promote_conn)
+                promote_conn.commit()
                 if promote_result['promoted'] > 0:
                     logger.info(
                         f"Promoted {promote_result['promoted']} approved sites: "

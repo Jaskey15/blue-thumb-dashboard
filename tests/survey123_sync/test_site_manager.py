@@ -266,6 +266,30 @@ class TestPromoteApprovedSites(unittest.TestCase):
         self.assertEqual(result['promoted'], 0)
         self.assertEqual(result['names'], [])
 
+    def test_promote_does_not_auto_commit(self):
+        """promote_approved_sites should not commit — caller manages transaction."""
+        from site_manager import promote_approved_sites
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO pending_sites (site_name, latitude, longitude, first_seen_date, status) "
+            "VALUES ('Auto Commit Test', 35.5, -97.2, '2026-04-01', 'approved')"
+        )
+        self.conn.commit()
+
+        promote_approved_sites(self.conn)
+
+        # Open a separate connection to check — if promote committed,
+        # the new site will be visible. If not, it won't be.
+        check_conn = sqlite3.connect(self.temp_db.name)
+        cursor2 = check_conn.cursor()
+        cursor2.execute("SELECT COUNT(*) FROM sites WHERE site_name = 'Auto Commit Test'")
+        count = cursor2.fetchone()[0]
+        check_conn.close()
+
+        # Should NOT be visible yet — caller hasn't committed
+        self.assertEqual(count, 0, "promote_approved_sites should not auto-commit")
+
 
 if __name__ == '__main__':
     unittest.main()
