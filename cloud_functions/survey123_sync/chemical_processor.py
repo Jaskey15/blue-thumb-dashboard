@@ -6,6 +6,7 @@ Reuses existing processing pipeline for consistency with main dashboard.
 
 import logging
 import os
+import re
 import sqlite3
 import sys
 from typing import Any, Dict
@@ -23,8 +24,13 @@ if (
     sys.path.insert(0, _candidate_root)
 
 from data_processing.chemical_utils import (
+    SITE_ALIASES,
+    apply_bdl_conversions,
     determine_status,
     insert_collection_event,
+    normalize_site_name,
+    remove_empty_chemical_rows,
+    validate_chemical_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,18 +108,86 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         site_query = "SELECT site_id, site_name FROM sites"
         site_df = pd.read_sql_query(site_query, conn)
         site_lookup = dict(zip(site_df['site_name'], site_df['site_id']))
+
+        normalized_site_lookup: Dict[str, int] = {}
+        for db_site_name, db_site_id in site_lookup.items():
+            normalized = normalize_site_name(db_site_name).casefold()
+            if normalized and normalized not in normalized_site_lookup:
+                normalized_site_lookup[normalized] = db_site_id
+
+        def _resolve_site(name: Any, site_lookup: Dict[str, int], normalized_site_lookup: Dict[str, int], site_aliases: Dict[str, str]):
+            """Resolve site ID and canonical name using exact, normalized, and alias matching."""
+            resolved_name = name
+            site_id = site_lookup.get(name)
+            
+            if site_id is None:
+                normalized_key = normalize_site_name(name).casefold()
+                site_id = normalized_site_lookup.get(normalized_key)
+
+                if site_id is None:
+                    canonical_name = site_aliases.get(normalized_key)
+                    if canonical_name:
+                        site_id = site_lookup.get(canonical_name)
+                        if site_id is None:
+                            site_id = normalized_site_lookup.get(
+                                normalize_site_name(canonical_name).casefold()
+                            )
+                        if site_id is not None:
+                            resolved_name = canonical_name
+                            
+            return site_id, resolved_name
         
         records_inserted = 0
+        skipped_records_unknown_sites = 0
+        unknown_sites = set()
+        unknown_site_counts: Dict[str, int] = {}
+        unknown_site_sample_ids: Dict[str, Any] = {}
+        unknown_site_sample_ids_truncated = False
+        unknown_site_sample_ids_limit_per_site = 50
         has_sample_id = 'sample_id' in df.columns
         
         for _, row in df.iterrows():
             site_name = row['Site_Name']
             
-            if site_name not in site_lookup:
-                logger.warning(f"Site {site_name} not found in database - skipping")
+            site_id, site_name = _resolve_site(
+                site_name, 
+                site_lookup, 
+                normalized_site_lookup, 
+                SITE_ALIASES
+            )
+
+            if site_id is None:
+                site_name_str = str(site_name).strip()
+                unknown_sites.add(site_name_str)
+                skipped_records_unknown_sites += 1
+                unknown_site_counts[site_name_str] = unknown_site_counts.get(site_name_str, 0) + 1
+
+                # Finding #5: Check if this was an alias that failed to resolve
+                normalized_key = normalize_site_name(site_name).casefold()
+                if normalized_key in SITE_ALIASES:
+                    logger.warning(f"Alias mismatch: Site '{site_name}' matched alias '{SITE_ALIASES[normalized_key]}', but canonical name not found in database - skipping")
+                else:
+                    logger.warning(f"Site '{site_name}' not found in database - skipping")
+
+                if has_sample_id:
+                    raw_sample_id = row.get('sample_id')
+                    sample_id_int = None
+                    if raw_sample_id is not None and pd.notna(raw_sample_id):
+                        try:
+                            sample_id_int = int(raw_sample_id)
+                        except Exception:
+                            sample_id_int = None
+
+                    if sample_id_int is not None:
+                        existing = unknown_site_sample_ids.get(site_name_str)
+                        if existing is None:
+                            unknown_site_sample_ids[site_name_str] = [sample_id_int]
+                        elif isinstance(existing, list):
+                            if len(existing) < unknown_site_sample_ids_limit_per_site:
+                                existing.append(sample_id_int)
+                            else:
+                                unknown_site_sample_ids_truncated = True
                 continue
-            
-            site_id = site_lookup[site_name]
             date_str = row['Date'].strftime('%Y-%m-%d')
 
             sample_id = None
@@ -164,7 +238,15 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         conn.close()
         
         logger.info(f"Successfully inserted {records_inserted} measurements")
-        return {'records_inserted': records_inserted}
+        return {
+            'records_inserted': records_inserted,
+            'skipped_records_unknown_sites': skipped_records_unknown_sites,
+            'unknown_sites': sorted(unknown_sites),
+            'unknown_site_counts': dict(sorted(unknown_site_counts.items())),
+            'unknown_site_sample_ids': dict(sorted(unknown_site_sample_ids.items())),
+            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+        }
         
     except Exception as e:
         logger.error(f"Error inserting data to database: {e}")

@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import functions_framework
 import pandas as pd
@@ -68,25 +69,48 @@ class DatabaseManager:
     
     def upload_database(self, local_path: str) -> bool:
         """Upload updated database with automatic backup creation."""
+        bucket_name = getattr(self.bucket, 'name', None) or '<unknown-bucket>'
+        db_object_name = self.db_blob_name
+
         try:
-            # Create timestamped backup before updating
-            backup_name = f"backups/blue_thumb_backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}.db"
-            blob = self.bucket.blob(self.db_blob_name)
+            backup_name = (
+                f"backups/blue_thumb_backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}.db"
+            )
+            blob = self.bucket.blob(db_object_name)
+
             if blob.exists():
-                backup_blob = self.bucket.blob(backup_name)
-                backup_blob.upload_from_string(blob.download_as_string())
-                logger.info(f"Created backup: {backup_name}")
-            
-            new_blob = self.bucket.blob(self.db_blob_name)
-            new_blob.upload_from_filename(local_path)
-            logger.info(f"Uploaded updated database to {self.db_blob_name}")
-            return True
-            
+                try:
+                    backup_blob = self.bucket.blob(backup_name)
+                    backup_blob.upload_from_string(blob.download_as_string())
+                    logger.info(f"Created backup: gs://{bucket_name}/{backup_name}")
+                except Exception as e:
+                    logger.error(
+                        f"Error creating backup: gs://{bucket_name}/{backup_name} from gs://{bucket_name}/{db_object_name}: {e}"
+                    )
+                    # Proceed with primary upload even if backup fails
+            else:
+                logger.info(
+                    f"No existing database object found at gs://{bucket_name}/{db_object_name}; skipping backup"
+                )
+
+            try:
+                new_blob = self.bucket.blob(db_object_name)
+                new_blob.upload_from_filename(local_path)
+                logger.info(f"Uploaded updated database to gs://{bucket_name}/{db_object_name}")
+                return True
+            except Exception as e:
+                logger.error(
+                    f"Error uploading updated database to gs://{bucket_name}/{db_object_name} from {local_path}: {e}"
+                )
+                raise
+
         except Exception as e:
-            logger.error(f"Error uploading database: {e}")
+            logger.error(
+                f"Error uploading database (bucket={bucket_name} object={db_object_name}): {e}"
+            )
             return False
     
-    def get_last_sync_timestamp(self, metadata_blob_name: str) -> datetime:
+    def get_last_sync_timestamp(self, metadata_blob_name: str = 'sync_metadata/last_sync.json') -> datetime:
         """Get timestamp of last successful sync for incremental updates."""
         try:
             blob = self.bucket.blob(metadata_blob_name)
@@ -106,8 +130,8 @@ class DatabaseManager:
     def update_sync_timestamp(
         self,
         timestamp: datetime,
-        metadata_blob_name: str,
-        metadata_extra: dict | None = None,
+        metadata_blob_name: str = 'sync_metadata/last_sync.json',
+        metadata_extra: Optional[dict] = None,
     ) -> bool:
         """Record successful sync timestamp for next incremental run."""
         try:
@@ -128,6 +152,37 @@ class DatabaseManager:
             return False
 
 
+def _get_feature_server_override(request):
+    since_date = None
+    since_datetime = None
+
+    try:
+        if hasattr(request, 'args') and request.args is not None:
+            since_date = request.args.get('since_date')
+            since_datetime = request.args.get('since_datetime')
+    except Exception as e:
+        logger.warning(f"Failed to parse override args (since_date/since_datetime): {e}")
+
+    try:
+        body = request.get_json(silent=True) if request is not None else None
+        if isinstance(body, dict):
+            since_date = since_date or body.get('since_date')
+            since_datetime = since_datetime or body.get('since_datetime')
+    except Exception as e:
+        logger.warning(f"Failed to parse override body (since_date/since_datetime): {e}")
+
+    # Finding #6: Validate since_datetime_override properly to prevent downstream crashes
+    if since_datetime:
+        try:
+            # Test parse it to ensure it's valid ISO format
+            datetime.fromisoformat(str(since_datetime))
+        except ValueError as e:
+            logger.warning(f"Invalid since_datetime override '{since_datetime}', discarded: {e}")
+            since_datetime = None
+
+    return since_date, since_datetime
+
+
 def _get_db_latest_chemical_date(db_path: str) -> str:
     try:
         conn = sqlite3.connect(db_path)
@@ -143,7 +198,7 @@ def _get_db_latest_chemical_date(db_path: str) -> str:
         return '2020-01-01'
 
 
-def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime):
+def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime, request=None):
     logger.info("Running FeatureServer sync mode")
 
     feature_server_metadata_blob = 'sync_metadata/last_feature_server_sync.json'
@@ -161,19 +216,63 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                 insert_processed_data_to_db,
             )
 
-            feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
-            if feature_server_blob.exists():
-                last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
-                sync_strategy = 'editdate'
-                sync_marker = last_sync.isoformat()
-                logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
-                records = arcgis_sync.fetch_features_edited_since(last_sync)
+            since_date_override, since_datetime_override = _get_feature_server_override(request)
+            if since_date_override or since_datetime_override:
+                if since_datetime_override:
+                    try:
+                        last_sync = datetime.fromisoformat(str(since_datetime_override))
+                    except Exception:
+                        last_sync = since_datetime_override
+                    sync_strategy = 'editdate_override'
+                    sync_marker = str(since_datetime_override)
+                    logger.info(f"FeatureServer sync strategy=editdate_override since={sync_marker}")
+                    records = arcgis_sync.fetch_features_edited_since(last_sync)
+                else:
+                    sync_strategy = 'day_override'
+                    sync_marker = str(since_date_override)
+                    logger.info(f"FeatureServer sync strategy=day_override since_date={sync_marker}")
+                    records = arcgis_sync.fetch_features_since(sync_marker)
             else:
-                since_date = _get_db_latest_chemical_date(temp_db.name)
-                sync_strategy = 'day'
-                sync_marker = since_date
-                logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
-                records = arcgis_sync.fetch_features_since(since_date)
+                feature_server_blob = db_manager.bucket.blob(feature_server_metadata_blob)
+                if feature_server_blob.exists():
+                    existing_metadata = None
+                    try:
+                        raw_metadata = feature_server_blob.download_as_string()
+                        if isinstance(raw_metadata, (bytes, bytearray)):
+                            raw_metadata = raw_metadata.decode('utf-8')
+                        if isinstance(raw_metadata, str) and raw_metadata.strip():
+                            existing_metadata = json.loads(raw_metadata)
+                        elif isinstance(raw_metadata, dict):
+                            existing_metadata = raw_metadata
+                    except Exception as e:
+                        logger.warning(
+                            f"Unable to parse FeatureServer sync metadata {feature_server_metadata_blob}: {e}"
+                        )
+                        existing_metadata = None
+
+                    backfill_since_date = None
+                    if isinstance(existing_metadata, dict) and existing_metadata.get('needs_backfill'):
+                        backfill_since_date = existing_metadata.get('backfill_since_date')
+
+                    if backfill_since_date:
+                        sync_strategy = 'day_backfill'
+                        sync_marker = str(backfill_since_date)
+                        logger.info(
+                            f"FeatureServer sync strategy=day_backfill since_date={sync_marker}"
+                        )
+                        records = arcgis_sync.fetch_features_since(sync_marker)
+                    else:
+                        last_sync = db_manager.get_last_sync_timestamp(feature_server_metadata_blob)
+                        sync_strategy = 'editdate'
+                        sync_marker = last_sync.isoformat()
+                        logger.info(f"FeatureServer sync strategy=editdate since={sync_marker}")
+                        records = arcgis_sync.fetch_features_edited_since(last_sync)
+                else:
+                    since_date = _get_db_latest_chemical_date(temp_db.name)
+                    sync_strategy = 'day'
+                    sync_marker = since_date
+                    logger.info(f"FeatureServer sync strategy=day since_date={since_date}")
+                    records = arcgis_sync.fetch_features_since(since_date)
 
             if not records:
                 logger.info("No new QAQC-complete FeatureServer records found")
@@ -233,6 +332,17 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             if 'error' in insert_result:
                 raise Exception(f"Database insertion failed: {insert_result['error']}")
 
+            skipped_unknown_site_records = insert_result.get('skipped_records_unknown_sites', 0)
+            unknown_sites = insert_result.get('unknown_sites')
+            unknown_site_counts = insert_result.get('unknown_site_counts') or {}
+            unknown_site_sample_ids = insert_result.get('unknown_site_sample_ids') or {}
+            unknown_site_sample_ids_truncated = bool(
+                insert_result.get('unknown_site_sample_ids_truncated', False)
+            )
+            unknown_site_sample_ids_limit_per_site = insert_result.get(
+                'unknown_site_sample_ids_limit_per_site'
+            )
+
             classification_result = classify_active_sites_in_db(temp_db.name)
             if 'error' in classification_result:
                 logger.warning(f"Site classification failed: {classification_result['error']}")
@@ -253,8 +363,20 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
+    needs_backfill = bool(skipped_unknown_site_records)
+    backfill_since_date = None
+    if sync_strategy in ('day', 'day_override'):
+        backfill_since_date = sync_marker if needs_backfill else None
+
+    watermark_timestamp = start_time
+    if needs_backfill and sync_strategy in ('editdate', 'editdate_override'):
+        try:
+            watermark_timestamp = last_sync
+        except Exception:
+            watermark_timestamp = start_time
+
     db_manager.update_sync_timestamp(
-        start_time,
+        watermark_timestamp,
         metadata_blob_name=feature_server_metadata_blob,
         metadata_extra={
             'mode': 'feature_server',
@@ -263,6 +385,14 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_fetched': len(records),
             'records_processed': len(processed_data),
             'records_inserted': insert_result.get('records_inserted', 0),
+            'skipped_records_unknown_sites': skipped_unknown_site_records,
+            'unknown_sites': unknown_sites or [],
+            'unknown_site_counts': unknown_site_counts,
+            'unknown_site_sample_ids': unknown_site_sample_ids,
+            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+            'needs_backfill': needs_backfill,
+            'backfill_since_date': backfill_since_date,
         },
     )
 
@@ -273,6 +403,14 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'records_fetched': len(records),
         'records_processed': len(processed_data),
         'records_inserted': insert_result.get('records_inserted', 0),
+        'skipped_records_unknown_sites': skipped_unknown_site_records,
+        'unknown_sites': unknown_sites or [],
+        'unknown_site_counts': unknown_site_counts,
+        'unknown_site_sample_ids': unknown_site_sample_ids,
+        'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
+        'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+        'needs_backfill': needs_backfill,
+        'backfill_since_date': backfill_since_date,
         'execution_time': str(datetime.now() - start_time),
         'sync_strategy': sync_strategy,
         'sync_marker': sync_marker,
@@ -290,7 +428,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
     return result
 
 
-@functions_framework.http
 def survey123_daily_sync(request):
     """
     Cloud Function entry point for daily FeatureServer data sync.
@@ -306,7 +443,7 @@ def survey123_daily_sync(request):
 
     try:
         db_manager = DatabaseManager(DATABASE_BUCKET)
-        return _run_feature_server_sync(db_manager, start_time)
+        return _run_feature_server_sync(db_manager, start_time, request)
 
     except Exception as e:
         error_msg = f"Sync failed: {str(e)}"
@@ -319,5 +456,9 @@ def survey123_daily_sync(request):
 
 
 if __name__ == "__main__":
-    result = survey123_daily_sync(None)
+    # Local testing support
+    class MockRequest:
+        pass
+    
+    result = survey123_daily_sync(MockRequest())
     print(json.dumps(result, indent=2))
