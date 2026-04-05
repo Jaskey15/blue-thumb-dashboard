@@ -109,24 +109,6 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
             """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE pending_sites (
-                pending_site_id INTEGER PRIMARY KEY,
-                site_name TEXT NOT NULL,
-                latitude REAL,
-                longitude REAL,
-                first_seen_date TEXT NOT NULL,
-                source TEXT DEFAULT 'feature_server',
-                status TEXT DEFAULT 'pending',
-                reviewed_date TEXT,
-                notes TEXT,
-                nearest_site_name TEXT,
-                nearest_site_distance_m REAL,
-                UNIQUE(site_name)
-            )
-            """
-        )
 
         conn.commit()
         conn.close()
@@ -402,7 +384,7 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    def test_unknown_site_is_skipped_and_reported(self):
+    def test_unknown_site_is_auto_inserted(self):
         db_path = self._create_minimal_db()
         try:
             df = pd.DataFrame(
@@ -423,16 +405,17 @@ class TestFeatureServerSiteResolution(unittest.TestCase):
             ):
                 result = chemical_processor.insert_processed_data_to_db(df, db_path)
 
-            self.assertEqual(result['records_inserted'], 0)
-            self.assertIn('new_pending', result)
-            self.assertIn('Definitely Not A Real Site', result['new_pending'])
+            self.assertGreater(result['records_inserted'], 0)
+            self.assertEqual(result.get('new_sites_created', 0), 1)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
+            cur.execute("SELECT site_name FROM sites WHERE site_name = 'Definitely Not A Real Site'")
+            self.assertIsNotNone(cur.fetchone())
             cur.execute("SELECT COUNT(*) FROM chemical_collection_events")
             count = cur.fetchone()[0]
             conn.close()
-            self.assertEqual(count, 0)
+            self.assertGreater(count, 0)
         finally:
             os.unlink(db_path)
 
