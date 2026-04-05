@@ -2,6 +2,8 @@
 
 **Date**: 2026-02-27
 
+**Check Databses if they match before executing**
+
 ## Background
 
 The production database lives in Google Cloud Storage (`gs://blue-thumb-database/blue_thumb.db`). Two processes interact with it:
@@ -15,7 +17,7 @@ The full pipeline (`python -m database.reset_database`) runs locally and rebuild
 
 ## The Gap
 
-The Haversine-only site deduplication (commit `8a74bff`, Feb 2026) has never been applied to the production database. The production `sites` table was built from an earlier local reset — before the Haversine-only change — and the Cloud Function has been incrementally adding chemical records on top of that original site table ever since.
+The Haversine-only site deduplication (commit `8a74bff`, Feb 2026) has never been applied to the production database(I think). The production `sites` table was built from an earlier local reset — before the Haversine-only change — and the Cloud Function has been incrementally adding chemical records on top of that original site table ever since. 
 
 This means the production DB may contain duplicate site entries that would be merged under the current dedup logic.
 

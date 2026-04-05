@@ -23,6 +23,15 @@ from database.database import close_connection, get_connection
 
 logger = setup_logging("merge_sites", category="processing")
 
+def haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance between two lat/lon points in meters."""
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
 def load_reference_data(conn):
     """Loads reference data for site name priority resolution.
 
@@ -107,14 +116,6 @@ def find_duplicate_coordinate_groups(conn=None, distance_threshold_m=50.0):
             rb = find(b)
             if ra != rb:
                 parent[rb] = ra
-
-        def haversine_m(lat1, lon1, lat2, lon2):
-            R = 6371000.0
-            phi1, phi2 = math.radians(lat1), math.radians(lat2)
-            dphi = math.radians(lat2 - lat1)
-            dlambda = math.radians(lon2 - lon1)
-            a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-            return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
         for i, row in df.iterrows():
             base = (lat_bins[i], lon_bins[i])

@@ -1,5 +1,6 @@
 """Tests for the API-first chemical data pipeline in arcgis_sync.py."""
 
+import sqlite3
 import unittest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
@@ -11,6 +12,7 @@ from data_processing.arcgis_sync import (
     prepare_dataframe,
     parse_epoch_dates,
     process_fetched_data,
+    resolve_unknown_sites,
     sync_all_chemical_data,
     _fetch_features_paginated,
 )
@@ -22,7 +24,7 @@ class TestPrepareDataframe(unittest.TestCase):
     def test_normalizes_site_names(self):
         records = [{'SiteName': 'Coffee Creek:  N. Sooner Rd.', 'objectid': 1, 'QAQC_Complete': 'X'}]
         df = prepare_dataframe(records)
-        self.assertEqual(df['SiteName'].iloc[0], 'Coffee Creek: N. Sooner Rd.')
+        self.assertEqual(df['SiteName'].iloc[0], 'Coffee Creek: N. Sooner Rd')
 
     def test_renames_objectid_to_sample_id(self):
         records = [{'SiteName': 'Test', 'objectid': 42, 'QAQC_Complete': 'X'}]
@@ -135,21 +137,29 @@ class TestSyncAllChemicalData(unittest.TestCase):
     """Tests for the full-fetch entry point."""
 
     @patch('data_processing.arcgis_sync.insert_chemical_data')
-    @patch('data_processing.arcgis_sync.filter_known_sites')
+    @patch('data_processing.arcgis_sync.resolve_unknown_sites')
+    @patch('data_processing.arcgis_sync.close_connection')
+    @patch('data_processing.arcgis_sync.get_connection')
     @patch('data_processing.arcgis_sync.process_fetched_data')
     @patch('data_processing.arcgis_sync.prepare_dataframe')
     @patch('data_processing.arcgis_sync._fetch_features_paginated')
-    def test_full_sync_pipeline(self, mock_fetch, mock_prepare, mock_process, mock_filter, mock_insert):
+    def test_full_sync_pipeline(self, mock_fetch, mock_prepare, mock_process,
+                                mock_conn, mock_close, mock_resolve, mock_insert):
         mock_fetch.return_value = [{'objectid': 1}]
         mock_prepare.return_value = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
         mock_process.return_value = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
-        mock_filter.return_value = (pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']}), [])
+        resolved_df = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
+        mock_resolve.return_value = (resolved_df, {
+            'already_known': 1, 'normalized_match': 0, 'alias_match': 0,
+            'coordinate_match': 0, 'auto_inserted': 0,
+        })
         mock_insert.return_value = {'measurements_added': 1, 'events_added': 1, 'sites_processed': 1}
 
         result = sync_all_chemical_data()
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['records_inserted'], 1)
         mock_fetch.assert_called_once()
+        mock_resolve.assert_called_once()
 
     @patch('data_processing.arcgis_sync._fetch_features_paginated')
     def test_empty_fetch_returns_zero(self, mock_fetch):
@@ -211,3 +221,215 @@ class TestProcessFetchedDataIntegration(unittest.TestCase):
         self.assertEqual(row['Chloride'], 15.0)  # low range, greater of 15, 14
         self.assertIn('soluble_nitrogen', result.columns)
         self.assertIn('sample_id', result.columns)
+
+
+class TestResolveUnknownSites(unittest.TestCase):
+    """Tests for resolve_unknown_sites resolution chain."""
+
+    import sqlite3
+
+    def _make_db(self):
+        """Create an in-memory DB with test sites."""
+        conn = self.sqlite3.connect(':memory:')
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('''
+            CREATE TABLE sites (
+                site_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL UNIQUE,
+                latitude REAL,
+                longitude REAL,
+                active INTEGER DEFAULT 1,
+                source_file TEXT
+            )
+        ''')
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Coffee Creek: N. Sooner Rd', 35.5, -97.5),
+        )
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Boomer Creek: 3rd Ave', 36.1, -97.1),
+        )
+        conn.commit()
+        return conn
+
+    def test_exact_match_keeps_row(self):
+        """Site that exactly matches DB is kept, stats show already_known=1."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Coffee Creek: N. Sooner Rd'],
+            'latitude': [35.5],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['already_known'], 1)
+        conn.close()
+
+    def test_normalized_match_resolves(self):
+        """Site name differing by whitespace/punctuation resolves to DB name."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Coffee Creek:  N. Sooner Rd.'],
+            'latitude': [35.5],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['normalized_match'], 1)
+        conn.close()
+
+    def test_haversine_match_resolves(self):
+        """Site within 50m of existing site resolves via coordinates."""
+        conn = self._make_db()
+        # Offset by ~30m (well within 50m threshold)
+        df = pd.DataFrame({
+            'Site_Name': ['Unknown Nearby Site'],
+            'latitude': [35.50027],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['coordinate_match'], 1)
+        conn.close()
+
+    def test_auto_insert_creates_new_site(self):
+        """Genuinely new site is auto-inserted into sites table."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Brand New Creek: Hwy 99'],
+            'latitude': [34.0],
+            'longitude': [-96.0],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Brand New Creek: Hwy 99')
+        self.assertEqual(stats['auto_inserted'], 1)
+        # Verify actually in DB
+        row = conn.execute(
+            "SELECT site_name FROM sites WHERE site_name = ?",
+            ('Brand New Creek: Hwy 99',),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        conn.close()
+
+    def test_no_rows_dropped(self):
+        """Mix of known, normalized, and new sites — all 3 rows preserved."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': [
+                'Coffee Creek: N. Sooner Rd',       # exact match
+                'Boomer Creek:  3rd Ave.',           # normalized match
+                'Totally New Creek: Main St',        # auto-insert
+            ],
+            'latitude': [35.5, 36.1, 34.0],
+            'longitude': [-97.5, -97.1, -96.0],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 3)
+        self.assertEqual(stats['already_known'], 1)
+        self.assertEqual(stats['normalized_match'], 1)
+        self.assertEqual(stats['auto_inserted'], 1)
+        conn.close()
+
+
+class TestSyncAllResolvesUnknownSites(unittest.TestCase):
+    """Integration test: sync_all_chemical_data uses resolve_unknown_sites."""
+
+    def _make_db(self):
+        """Create in-memory DB with sites table and one known site."""
+        conn = sqlite3.connect(':memory:')
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE sites (
+                site_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL UNIQUE,
+                latitude REAL, longitude REAL,
+                active INTEGER DEFAULT 1, source_file TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Known Creek: Main St', 35.5, -97.5),
+        )
+        conn.commit()
+        return conn
+
+    def _make_feature(self, objectid, site_name, x, y):
+        """Build a full feature dict like _fetch_features_paginated returns."""
+        return {
+            'attributes': {
+                'objectid': objectid,
+                'SiteName': site_name,
+                'day': 1742025600000,
+                'oxygen_sat': 95,
+                'pH1': 7.0, 'pH2': 7.1,
+                'nitratetest1': 0.5, 'nitratetest2': 0.6,
+                'nitritetest1': 0.01, 'nitritetest2': 0.02,
+                'Ammonia_Range': 'Low',
+                'ammonia_Nitrogen2': 0.1, 'ammonia_Nitrogen3': 0.1,
+                'Ammonia_nitrogen_midrange1_Final': None,
+                'Ammonia_nitrogen_midrange2_Final': None,
+                'Ortho_Range': 'Low',
+                'Orthophosphate_Low1_Final': 0.02,
+                'Orthophosphate_Low2_Final': 0.02,
+                'Orthophosphate_Mid1_Final': None,
+                'Orthophosphate_Mid2_Final': None,
+                'Orthophosphate_High1_Final': None,
+                'Orthophosphate_High2_Final': None,
+                'Chloride_Range': 'Low',
+                'Chloride_Low1_Final': 10, 'Chloride_Low2_Final': 10,
+                'Chloride_High1_Final': None, 'Chloride_High2_Final': None,
+                'QAQC_Complete': 'X',
+            },
+            'geometry': {'x': x, 'y': y},
+        }
+
+    @patch('data_processing.arcgis_sync.insert_chemical_data')
+    @patch('data_processing.arcgis_sync.close_connection')
+    @patch('data_processing.arcgis_sync.get_connection')
+    @patch('data_processing.arcgis_sync._fetch_features_paginated')
+    def test_unknown_site_auto_inserted(self, mock_fetch, mock_get_conn,
+                                        mock_close_conn, mock_insert):
+        """Unknown site is auto-inserted, not dropped."""
+        conn = self._make_db()
+
+        mock_fetch.return_value = [
+            self._make_feature(1, 'Known Creek: Main St', -97.5, 35.5),
+            self._make_feature(2, 'Brand New Creek: Hwy 99', -96.0, 34.0),
+        ]
+        mock_get_conn.return_value = conn
+        mock_close_conn.side_effect = lambda c: None  # don't close the in-memory DB
+        mock_insert.return_value = {
+            'measurements_added': 10,
+            'events_added': 2,
+            'sites_processed': 2,
+        }
+
+        result = sync_all_chemical_data(dry_run=False)
+
+        # Both rows should reach insert_chemical_data (none dropped)
+        insert_call_df = mock_insert.call_args[0][0]
+        self.assertEqual(len(insert_call_df), 2)
+
+        # Unknown site was auto-inserted
+        self.assertEqual(result['sites_auto_inserted'], 1)
+        self.assertIn('site_resolution', result)
+        self.assertEqual(result['site_resolution']['auto_inserted'], 1)
+
+        # Verify the unknown site is now in the DB
+        row = conn.execute(
+            "SELECT site_name FROM sites WHERE site_name = ?",
+            ('Brand New Creek: Hwy 99',),
+        ).fetchone()
+        self.assertIsNotNone(row)
+
+        # geometry was requested
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args[1]
+        self.assertTrue(call_kwargs.get('return_geometry'))
+
+        conn.close()

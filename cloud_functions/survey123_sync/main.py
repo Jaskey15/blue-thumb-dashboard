@@ -215,7 +215,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                 classify_active_sites_in_db,
                 insert_processed_data_to_db,
             )
-
             since_date_override, since_datetime_override = _get_feature_server_override(request)
             if since_date_override or since_datetime_override:
                 if since_datetime_override:
@@ -332,17 +331,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             if 'error' in insert_result:
                 raise Exception(f"Database insertion failed: {insert_result['error']}")
 
-            skipped_unknown_site_records = insert_result.get('skipped_records_unknown_sites', 0)
-            unknown_sites = insert_result.get('unknown_sites')
-            unknown_site_counts = insert_result.get('unknown_site_counts') or {}
-            unknown_site_sample_ids = insert_result.get('unknown_site_sample_ids') or {}
-            unknown_site_sample_ids_truncated = bool(
-                insert_result.get('unknown_site_sample_ids_truncated', False)
-            )
-            unknown_site_sample_ids_limit_per_site = insert_result.get(
-                'unknown_site_sample_ids_limit_per_site'
-            )
-
             classification_result = classify_active_sites_in_db(temp_db.name)
             if 'error' in classification_result:
                 logger.warning(f"Site classification failed: {classification_result['error']}")
@@ -363,7 +351,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
-    needs_backfill = bool(skipped_unknown_site_records)
+    needs_backfill = bool(insert_result.get('new_sites_created'))
     backfill_since_date = None
     if sync_strategy in ('day', 'day_override'):
         backfill_since_date = sync_marker if needs_backfill else None
@@ -385,12 +373,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_fetched': len(records),
             'records_processed': len(processed_data),
             'records_inserted': insert_result.get('records_inserted', 0),
-            'skipped_records_unknown_sites': skipped_unknown_site_records,
-            'unknown_sites': unknown_sites or [],
-            'unknown_site_counts': unknown_site_counts,
-            'unknown_site_sample_ids': unknown_site_sample_ids,
-            'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
-            'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
+            'new_sites_created': insert_result.get('new_sites_created', 0),
             'needs_backfill': needs_backfill,
             'backfill_since_date': backfill_since_date,
         },
@@ -403,12 +386,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
         'records_fetched': len(records),
         'records_processed': len(processed_data),
         'records_inserted': insert_result.get('records_inserted', 0),
-        'skipped_records_unknown_sites': skipped_unknown_site_records,
-        'unknown_sites': unknown_sites or [],
-        'unknown_site_counts': unknown_site_counts,
-        'unknown_site_sample_ids': unknown_site_sample_ids,
-        'unknown_site_sample_ids_truncated': unknown_site_sample_ids_truncated,
-        'unknown_site_sample_ids_limit_per_site': unknown_site_sample_ids_limit_per_site,
         'needs_backfill': needs_backfill,
         'backfill_since_date': backfill_since_date,
         'execution_time': str(datetime.now() - start_time),
@@ -424,10 +401,15 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'historic_count': classification_result.get('historic_count', 0)
         }
 
+    new_sites = insert_result.get('new_sites_created', 0)
+    if new_sites:
+        result['new_sites_created'] = new_sites
+
     logger.info(f"FeatureServer sync completed successfully: {result}")
     return result
 
 
+@functions_framework.http
 def survey123_daily_sync(request):
     """
     Cloud Function entry point for daily FeatureServer data sync.

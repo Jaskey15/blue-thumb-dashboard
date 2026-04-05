@@ -109,6 +109,9 @@ dmypy.json
 .tmp/
 .temp/
 
+# Git worktrees
+.worktrees/
+
 # Compiled translations
 *.mo
 

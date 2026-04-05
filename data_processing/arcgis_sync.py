@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
-from data_processing.chemical_utils import normalize_site_name
-
 try:
     from data_processing import setup_logging
 except ModuleNotFoundError:
@@ -28,18 +26,23 @@ except ModuleNotFoundError:
         sys.path.insert(0, _project_root)
     from data_processing import setup_logging
 from data_processing.chemical_utils import (
+    SITE_ALIASES,
     apply_bdl_conversions,
     calculate_soluble_nitrogen,
     insert_chemical_data,
+    normalize_site_name,
     remove_empty_chemical_rows,
     validate_chemical_data,
 )
+from data_processing.merge_sites import haversine_m
 from database.database import close_connection, get_connection
 
 logger = setup_logging("arcgis_sync", category="processing")
 
 # Public Feature Server endpoint (no authentication required).
 # Verified working 2026-01-27 against ground-truth records.
+DISTANCE_THRESHOLD_M = 50.0
+
 FEATURE_SERVER_URL = (
     "https://services5.arcgis.com/L6JGkSUcgPo1zSDi/arcgis/rest/services/"
     "bluethumb_oct2020_view/FeatureServer/0/query"
@@ -263,6 +266,12 @@ def format_to_database_schema(df):
         if has_sample_id:
             required_columns.append('sample_id')
 
+        # Preserve geometry columns for Haversine site resolution
+        if 'latitude' in formatted_df.columns:
+            required_columns.append('latitude')
+        if 'longitude' in formatted_df.columns:
+            required_columns.append('longitude')
+
         formatted_df = formatted_df[required_columns]
 
         numeric_columns = [
@@ -306,6 +315,7 @@ def fetch_features_since(since_date, timeout_seconds=30):
         out_fields=OUT_FIELDS,
         order_by_fields='day DESC',
         timeout_seconds=timeout_seconds,
+        return_geometry=True,
     )
 
 
@@ -331,6 +341,7 @@ def fetch_features_edited_since(since_datetime, timeout_seconds=30):
             out_fields=out_fields,
             order_by_fields='EditDate DESC',
             timeout_seconds=timeout_seconds,
+            return_geometry=True,
         )
     except ValueError as e:
         if since_ts_str is None:
@@ -347,6 +358,7 @@ def fetch_features_edited_since(since_datetime, timeout_seconds=30):
             out_fields=out_fields,
             order_by_fields='EditDate DESC',
             timeout_seconds=timeout_seconds,
+            return_geometry=True,
         )
 
 
@@ -409,32 +421,42 @@ def _fetch_features_paginated(where, out_fields, order_by_fields, timeout_second
 
 def prepare_dataframe(records):
     """
-    Convert raw Feature Server records to a DataFrame, keeping API field names.
+    Convert raw Feature Server records into a flat DataFrame.
 
-    Handles:
-    1. Create DataFrame from raw API records
-    2. Normalize site names (collapse whitespace)
-    3. Filter QAQC-complete records (defense-in-depth)
-    4. Rename objectid → sample_id
+    Handles both attribute-only dicts (return_geometry=False) and full
+    feature dicts (return_geometry=True). When geometry is present,
+    latitude and longitude are extracted into columns for downstream
+    Haversine matching.
 
     Args:
-        records: List of attribute dicts from fetch_features_since().
+        records: List of dicts from _fetch_features_paginated().
 
     Returns:
-        DataFrame with API field names, ready for processing.
+        DataFrame with API field columns, plus latitude/longitude when
+        geometry was included. objectid is renamed to sample_id.
     """
     if not records:
         return pd.DataFrame()
 
-    df = pd.DataFrame(records)
+    # Detect format: full feature dicts have an 'attributes' key
+    if records and isinstance(records[0], dict) and 'attributes' in records[0]:
+        rows = []
+        for record in records:
+            attrs = record.get('attributes', {})
+            geom = record.get('geometry') or {}
+            attrs['latitude'] = geom.get('y')
+            attrs['longitude'] = geom.get('x')
+            rows.append(attrs)
+        df = pd.DataFrame(rows)
+    else:
+        df = pd.DataFrame(records)
+
+    if df.empty:
+        return df
 
     # Normalize site names
     if 'SiteName' in df.columns:
-        original_names = df['SiteName'].copy()
         df['SiteName'] = df['SiteName'].apply(_normalize_site_name)
-        changed = (original_names != df['SiteName']).sum()
-        if changed > 0:
-            logger.info(f"Normalized {changed} site names (whitespace)")
 
     # Filter to only QAQC-complete records (defense-in-depth)
     if 'QAQC_Complete' in df.columns:
@@ -511,6 +533,133 @@ def filter_known_sites(df):
         )
 
     return df[known_mask].copy(), skipped
+
+
+def resolve_unknown_sites(df, conn=None):
+    """Resolve unknown site names instead of dropping them.
+
+    Walks a resolution chain for each unique Site_Name in the DataFrame:
+    1. Exact match — name exists in DB
+    2. Normalized match — normalize + casefold matches a DB name
+    3. Alias lookup — SITE_ALIASES maps to a canonical DB name
+    4. Haversine match — coordinates within 50m of existing site
+    5. Auto-insert — create new site in DB
+
+    Args:
+        df: DataFrame with 'Site_Name', 'latitude', 'longitude' columns.
+        conn: SQLite connection. If None, one is obtained and closed internally.
+
+    Returns:
+        Tuple of (resolved_df, stats_dict) where resolved_df has Site_Name
+        remapped to DB names, and stats_dict has resolution counts.
+    """
+    if df.empty or 'Site_Name' not in df.columns:
+        return df.copy(), {
+            'already_known': 0, 'normalized_match': 0,
+            'alias_match': 0, 'coordinate_match': 0, 'auto_inserted': 0,
+        }
+
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection()
+
+    try:
+        # Load all sites from DB
+        rows = conn.execute(
+            "SELECT site_id, site_name, latitude, longitude FROM sites"
+        ).fetchall()
+        site_lookup = {row[1]: row[0] for row in rows}
+        existing_sites = [(row[0], row[1], row[2], row[3]) for row in rows]
+
+        # Build normalized lookup: normalized_casefold -> db_name
+        norm_lookup = {}
+        for db_name in site_lookup:
+            norm_key = normalize_site_name(db_name).casefold()
+            norm_lookup[norm_key] = db_name
+
+        stats = {
+            'already_known': 0, 'normalized_match': 0,
+            'alias_match': 0, 'coordinate_match': 0, 'auto_inserted': 0,
+        }
+        name_map = {}
+
+        for site_name in df['Site_Name'].unique():
+            # 1. Exact match
+            if site_name in site_lookup:
+                name_map[site_name] = site_name
+                stats['already_known'] += 1
+                continue
+
+            # 2. Normalized match
+            norm_key = normalize_site_name(site_name).casefold()
+            if norm_key in norm_lookup:
+                db_name = norm_lookup[norm_key]
+                name_map[site_name] = db_name
+                stats['normalized_match'] += 1
+                logger.info(f"Normalized match: '{site_name}' -> '{db_name}'")
+                continue
+
+            # 3. Alias lookup
+            canonical = SITE_ALIASES.get(norm_key)
+            if canonical:
+                canon_norm = normalize_site_name(canonical).casefold()
+                if canon_norm in norm_lookup:
+                    db_name = norm_lookup[canon_norm]
+                    name_map[site_name] = db_name
+                    stats['alias_match'] += 1
+                    logger.info(f"Alias match: '{site_name}' -> '{db_name}'")
+                    continue
+
+            # 4. Haversine coordinate match
+            site_rows = df[df['Site_Name'] == site_name]
+            lat_vals = site_rows['latitude'].dropna()
+            lon_vals = site_rows['longitude'].dropna()
+            matched_coord = False
+            if len(lat_vals) > 0 and len(lon_vals) > 0:
+                lat = lat_vals.iloc[0]
+                lon = lon_vals.iloc[0]
+                for site_id, existing_name, ex_lat, ex_lon in existing_sites:
+                    if ex_lat is None or ex_lon is None:
+                        continue
+                    dist = haversine_m(lat, lon, ex_lat, ex_lon)
+                    if dist <= DISTANCE_THRESHOLD_M:
+                        name_map[site_name] = existing_name
+                        stats['coordinate_match'] += 1
+                        logger.info(
+                            f"Coordinate match: '{site_name}' is {dist:.1f}m from "
+                            f"'{existing_name}'"
+                        )
+                        matched_coord = True
+                        break
+            if matched_coord:
+                continue
+
+            # 5. Auto-insert
+            insert_lat = lat_vals.iloc[0] if len(lat_vals) > 0 else None
+            insert_lon = lon_vals.iloc[0] if len(lon_vals) > 0 else None
+            conn.execute(
+                "INSERT OR IGNORE INTO sites (site_name, latitude, longitude, active) "
+                "VALUES (?, ?, ?, 1)",
+                (site_name, insert_lat, insert_lon),
+            )
+            conn.commit()
+            new_row = conn.execute(
+                "SELECT site_id FROM sites WHERE site_name = ?", (site_name,)
+            ).fetchone()
+            site_lookup[site_name] = new_row[0]
+            existing_sites.append((new_row[0], site_name, insert_lat, insert_lon))
+            norm_lookup[normalize_site_name(site_name).casefold()] = site_name
+            name_map[site_name] = site_name
+            stats['auto_inserted'] += 1
+            logger.info(f"Auto-inserted new site: '{site_name}' (site_id={new_row[0]})")
+
+        resolved_df = df.copy()
+        resolved_df['Site_Name'] = resolved_df['Site_Name'].map(name_map)
+        return resolved_df, stats
+
+    finally:
+        if own_conn:
+            close_connection(conn)
 
 
 def fetch_site_data(timeout_seconds=30):
@@ -701,6 +850,11 @@ def sync_all_chemical_data(dry_run=False):
     Used by reset_database.py for full database rebuilds. Unlike sync_new_chemical_data()
     which fetches incrementally by date, this fetches everything.
 
+    Note: Site resolution logic here duplicates cloud_functions/survey123_sync/site_manager.py.
+    This local path is intended for one-time DB rebuilds — daily sync is handled by the
+    Cloud Function. If this function sees continued use, consider extracting shared
+    site resolution into data_processing/site_manager.py.
+
     Args:
         dry_run: If True, fetch and process but skip database insertion.
 
@@ -714,6 +868,7 @@ def sync_all_chemical_data(dry_run=False):
         where="QAQC_Complete IS NOT NULL",
         out_fields=CHEMICAL_FIELDS,
         order_by_fields='day ASC',
+        return_geometry=True,
     )
 
     if not records:
@@ -745,29 +900,33 @@ def sync_all_chemical_data(dry_run=False):
             'execution_time': str(datetime.now() - start_time),
         }
 
-    filtered_df, skipped_sites = filter_known_sites(processed_df)
+    conn = get_connection()
+    try:
+        resolved_df, site_stats = resolve_unknown_sites(processed_df, conn)
+    finally:
+        close_connection(conn)
 
     if dry_run:
-        logger.info(f"DRY RUN: would insert {len(filtered_df)} records")
+        logger.info(f"DRY RUN: would insert {len(resolved_df)} records")
         return {
             'status': 'dry_run',
             'records_fetched': len(records),
             'records_after_processing': len(processed_df),
-            'records_ready': len(filtered_df),
-            'skipped_sites': skipped_sites,
+            'records_ready': len(resolved_df),
+            'site_resolution': site_stats,
             'execution_time': str(datetime.now() - start_time),
         }
 
-    if filtered_df.empty:
+    if resolved_df.empty:
         return {
             'status': 'success',
             'records_fetched': len(records),
             'records_inserted': 0,
-            'skipped_sites': skipped_sites,
+            'site_resolution': site_stats,
             'execution_time': str(datetime.now() - start_time),
         }
 
-    stats = insert_chemical_data(filtered_df, data_source="arcgis_feature_server")
+    stats = insert_chemical_data(resolved_df, data_source="arcgis_feature_server")
 
     result = {
         'status': 'success',
@@ -776,7 +935,8 @@ def sync_all_chemical_data(dry_run=False):
         'records_inserted': stats.get('measurements_added', 0),
         'events_added': stats.get('events_added', 0),
         'sites_processed': stats.get('sites_processed', 0),
-        'skipped_sites': skipped_sites,
+        'sites_auto_inserted': site_stats.get('auto_inserted', 0),
+        'site_resolution': site_stats,
         'execution_time': str(datetime.now() - start_time),
     }
 
