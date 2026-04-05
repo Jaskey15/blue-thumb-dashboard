@@ -29,10 +29,11 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - Click-to-navigate functionality for detailed site analysis
 
 ### Cloud-Powered Data Pipeline
-- **Automated FeatureServer Sync**: Daily sync from public ArcGIS REST API with idempotent insertion
-- **Incremental Sync**: EditDate watermarks for efficient delta fetches
+- **API-First Chemical Pipeline**: Fetches directly from ArcGIS FeatureServer — no CSV intermediaries
+- **Automatic Site Registration**: Unknown sites resolved via normalized name matching, alias lookup, Haversine coordinate matching (50m), or auto-insertion
+- **Incremental Sync**: EditDate watermarks for efficient daily delta fetches
 - **Live Database Refresh**: Cloud Run automatically detects and downloads updated databases from GCS
-- **Smart Data Processing**: Handles range-based measurements and validation
+- **Smart Data Processing**: Handles range-based measurements, nutrient selection logic, and BDL conversion
 - **Backup Management**: Automatic database backups before each update
 - **Cost-Efficient**: <$10/month operational costs
 
@@ -71,6 +72,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 │   └── survey123_sync/    # Automated FeatureServer data sync
 │       ├── main.py        # Cloud Function entry point
 │       ├── chemical_processor.py
+│       ├── site_manager.py # Auto-resolves unknown sites during sync
 │       ├── deploy.sh      # Stages shared modules for deployment
 │       └── requirements.txt
 ├── database/             # Database schema, connections, GCS-backed refresh
@@ -115,8 +117,8 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/Blue-Thumb-Dashboard.git
-   cd Blue-Thumb-Dashboard
+   git clone https://github.com/Jaskey15/blue-thumb-dashboard.git
+   cd blue-thumb-dashboard
    ```
 
 2. **Create virtual environment**
@@ -132,11 +134,11 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 
 4. **Obtain the source data**
 
-   Raw CSV files are not included in the repository. See the [Data Access](#data-access) section below for download links and API details.
+   Current chemical data is fetched automatically from the ArcGIS FeatureServer during database reset — no download needed.
 
-   Place downloaded CSV files in `data/raw/` to match the expected directory structure.
+   Biological, habitat, and legacy (pre-2020) chemical data must be downloaded as CSVs. See the [Data Access](#data-access) section for download links. Place files in `data/raw/`.
 
-5. **Load the monitoring data**
+5. **Build the database**
    ```bash
    python -m database.reset_database
    ```
@@ -158,7 +160,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 - **Scalable Design**: Cloud-native architecture with live database refresh on Cloud Run
 
 ### Testing & Quality Assurance
-- **Comprehensive Test Suite**: 700+ tests ensuring reliability across all components
+- **Comprehensive Test Suite**: 800+ tests ensuring reliability across all components
 - **Automated CI/CD**: Continuous integration with quality checks
 - **Data Validation**: Multi-layer validation ensuring data integrity
 - **Performance Monitoring**: Real-time tracking of system performance
@@ -196,9 +198,9 @@ https://occwaterquality.shinyapps.io/OCC-app23b/
 
 Place downloaded files in `data/raw/` and run `python -m database.reset_database` to build the local database.
 
-### Updated Chemical Data (ArcGIS FeatureServer)
+### Current Chemical Data (ArcGIS FeatureServer)
 
-Current chemical monitoring data is collected via ArcGIS Survey123 and served through a public FeatureServer REST API. No authentication is required.
+Current chemical monitoring data (Oct 2020–present) is collected via ArcGIS Survey123 and served through a public FeatureServer REST API. No authentication is required. **You do not need to download this data manually** — `reset_database` fetches it directly from the API.
 
 **REST API endpoint:**
 ```
@@ -210,7 +212,7 @@ Example query to fetch recent records:
 ?where=1%3D1&outFields=*&resultRecordCount=10&orderByFields=EditDate+DESC&f=json
 ```
 
-The dashboard's Cloud Function uses this API for automated daily syncs (see `data_processing/arcgis_sync.py`). You can also browse the data interactively via the [Blue Thumb Web Map](https://okconservation.maps.arcgis.com/apps/webappviewer/index.html?id=1654493dccdd42c29d170785c6b242bf).
+The local pipeline (`data_processing/arcgis_sync.py`) and Cloud Function both fetch from this API. A daily Cloud Function sync keeps the production database current via incremental EditDate watermarks. You can also browse the data interactively via the [Blue Thumb Web Map](https://okconservation.maps.arcgis.com/apps/webappviewer/index.html?id=1654493dccdd42c29d170785c6b242bf).
 
 ## Acknowledgments
 
