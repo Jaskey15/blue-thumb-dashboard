@@ -28,18 +28,22 @@ except ModuleNotFoundError:
         sys.path.insert(0, _project_root)
     from data_processing import setup_logging
 from data_processing.chemical_utils import (
+    SITE_ALIASES,
     apply_bdl_conversions,
     calculate_soluble_nitrogen,
     insert_chemical_data,
     remove_empty_chemical_rows,
     validate_chemical_data,
 )
+from data_processing.merge_sites import haversine_m
 from database.database import close_connection, get_connection
 
 logger = setup_logging("arcgis_sync", category="processing")
 
 # Public Feature Server endpoint (no authentication required).
 # Verified working 2026-01-27 against ground-truth records.
+DISTANCE_THRESHOLD_M = 50.0
+
 FEATURE_SERVER_URL = (
     "https://services5.arcgis.com/L6JGkSUcgPo1zSDi/arcgis/rest/services/"
     "bluethumb_oct2020_view/FeatureServer/0/query"
@@ -530,6 +534,133 @@ def filter_known_sites(df):
         )
 
     return df[known_mask].copy(), skipped
+
+
+def resolve_unknown_sites(df, conn=None):
+    """Resolve unknown site names instead of dropping them.
+
+    Walks a resolution chain for each unique Site_Name in the DataFrame:
+    1. Exact match — name exists in DB
+    2. Normalized match — normalize + casefold matches a DB name
+    3. Alias lookup — SITE_ALIASES maps to a canonical DB name
+    4. Haversine match — coordinates within 50m of existing site
+    5. Auto-insert — create new site in DB
+
+    Args:
+        df: DataFrame with 'Site_Name', 'latitude', 'longitude' columns.
+        conn: SQLite connection. If None, one is obtained and closed internally.
+
+    Returns:
+        Tuple of (resolved_df, stats_dict) where resolved_df has Site_Name
+        remapped to DB names, and stats_dict has resolution counts.
+    """
+    if df.empty or 'Site_Name' not in df.columns:
+        return df.copy(), {
+            'already_known': 0, 'normalized_match': 0,
+            'alias_match': 0, 'coordinate_match': 0, 'auto_inserted': 0,
+        }
+
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection()
+
+    try:
+        # Load all sites from DB
+        rows = conn.execute(
+            "SELECT site_id, site_name, latitude, longitude FROM sites"
+        ).fetchall()
+        site_lookup = {row[1]: row[0] for row in rows}
+        existing_sites = [(row[0], row[1], row[2], row[3]) for row in rows]
+
+        # Build normalized lookup: normalized_casefold -> db_name
+        norm_lookup = {}
+        for db_name in site_lookup:
+            norm_key = normalize_site_name(db_name).casefold()
+            norm_lookup[norm_key] = db_name
+
+        stats = {
+            'already_known': 0, 'normalized_match': 0,
+            'alias_match': 0, 'coordinate_match': 0, 'auto_inserted': 0,
+        }
+        name_map = {}
+
+        for site_name in df['Site_Name'].unique():
+            # 1. Exact match
+            if site_name in site_lookup:
+                name_map[site_name] = site_name
+                stats['already_known'] += 1
+                continue
+
+            # 2. Normalized match
+            norm_key = normalize_site_name(site_name).casefold()
+            if norm_key in norm_lookup:
+                db_name = norm_lookup[norm_key]
+                name_map[site_name] = db_name
+                stats['normalized_match'] += 1
+                logger.info(f"Normalized match: '{site_name}' -> '{db_name}'")
+                continue
+
+            # 3. Alias lookup
+            canonical = SITE_ALIASES.get(norm_key)
+            if canonical:
+                canon_norm = normalize_site_name(canonical).casefold()
+                if canon_norm in norm_lookup:
+                    db_name = norm_lookup[canon_norm]
+                    name_map[site_name] = db_name
+                    stats['alias_match'] += 1
+                    logger.info(f"Alias match: '{site_name}' -> '{db_name}'")
+                    continue
+
+            # 4. Haversine coordinate match
+            site_rows = df[df['Site_Name'] == site_name]
+            lat_vals = site_rows['latitude'].dropna()
+            lon_vals = site_rows['longitude'].dropna()
+            matched_coord = False
+            if len(lat_vals) > 0 and len(lon_vals) > 0:
+                lat = lat_vals.iloc[0]
+                lon = lon_vals.iloc[0]
+                for site_id, existing_name, ex_lat, ex_lon in existing_sites:
+                    if ex_lat is None or ex_lon is None:
+                        continue
+                    dist = haversine_m(lat, lon, ex_lat, ex_lon)
+                    if dist <= DISTANCE_THRESHOLD_M:
+                        name_map[site_name] = existing_name
+                        stats['coordinate_match'] += 1
+                        logger.info(
+                            f"Coordinate match: '{site_name}' is {dist:.1f}m from "
+                            f"'{existing_name}'"
+                        )
+                        matched_coord = True
+                        break
+            if matched_coord:
+                continue
+
+            # 5. Auto-insert
+            insert_lat = lat_vals.iloc[0] if len(lat_vals) > 0 else None
+            insert_lon = lon_vals.iloc[0] if len(lon_vals) > 0 else None
+            conn.execute(
+                "INSERT OR IGNORE INTO sites (site_name, latitude, longitude, active) "
+                "VALUES (?, ?, ?, 1)",
+                (site_name, insert_lat, insert_lon),
+            )
+            conn.commit()
+            new_row = conn.execute(
+                "SELECT site_id FROM sites WHERE site_name = ?", (site_name,)
+            ).fetchone()
+            site_lookup[site_name] = new_row[0]
+            existing_sites.append((new_row[0], site_name, insert_lat, insert_lon))
+            norm_lookup[normalize_site_name(site_name).casefold()] = site_name
+            name_map[site_name] = site_name
+            stats['auto_inserted'] += 1
+            logger.info(f"Auto-inserted new site: '{site_name}' (site_id={new_row[0]})")
+
+        resolved_df = df.copy()
+        resolved_df['Site_Name'] = resolved_df['Site_Name'].map(name_map)
+        return resolved_df, stats
+
+    finally:
+        if own_conn:
+            close_connection(conn)
 
 
 def fetch_site_data(timeout_seconds=30):

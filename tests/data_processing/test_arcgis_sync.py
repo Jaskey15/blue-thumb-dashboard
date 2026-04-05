@@ -11,6 +11,7 @@ from data_processing.arcgis_sync import (
     prepare_dataframe,
     parse_epoch_dates,
     process_fetched_data,
+    resolve_unknown_sites,
     sync_all_chemical_data,
     _fetch_features_paginated,
 )
@@ -211,3 +212,116 @@ class TestProcessFetchedDataIntegration(unittest.TestCase):
         self.assertEqual(row['Chloride'], 15.0)  # low range, greater of 15, 14
         self.assertIn('soluble_nitrogen', result.columns)
         self.assertIn('sample_id', result.columns)
+
+
+class TestResolveUnknownSites(unittest.TestCase):
+    """Tests for resolve_unknown_sites resolution chain."""
+
+    import sqlite3
+
+    def _make_db(self):
+        """Create an in-memory DB with test sites."""
+        conn = self.sqlite3.connect(':memory:')
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('''
+            CREATE TABLE sites (
+                site_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL UNIQUE,
+                latitude REAL,
+                longitude REAL,
+                active INTEGER DEFAULT 1,
+                source_file TEXT
+            )
+        ''')
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Coffee Creek: N. Sooner Rd', 35.5, -97.5),
+        )
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Boomer Creek: 3rd Ave', 36.1, -97.1),
+        )
+        conn.commit()
+        return conn
+
+    def test_exact_match_keeps_row(self):
+        """Site that exactly matches DB is kept, stats show already_known=1."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Coffee Creek: N. Sooner Rd'],
+            'latitude': [35.5],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['already_known'], 1)
+        conn.close()
+
+    def test_normalized_match_resolves(self):
+        """Site name differing by whitespace/punctuation resolves to DB name."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Coffee Creek:  N. Sooner Rd.'],
+            'latitude': [35.5],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['normalized_match'], 1)
+        conn.close()
+
+    def test_haversine_match_resolves(self):
+        """Site within 50m of existing site resolves via coordinates."""
+        conn = self._make_db()
+        # Offset by ~30m (well within 50m threshold)
+        df = pd.DataFrame({
+            'Site_Name': ['Unknown Nearby Site'],
+            'latitude': [35.50027],
+            'longitude': [-97.5],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Coffee Creek: N. Sooner Rd')
+        self.assertEqual(stats['coordinate_match'], 1)
+        conn.close()
+
+    def test_auto_insert_creates_new_site(self):
+        """Genuinely new site is auto-inserted into sites table."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': ['Brand New Creek: Hwy 99'],
+            'latitude': [34.0],
+            'longitude': [-96.0],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 1)
+        self.assertEqual(resolved_df['Site_Name'].iloc[0], 'Brand New Creek: Hwy 99')
+        self.assertEqual(stats['auto_inserted'], 1)
+        # Verify actually in DB
+        row = conn.execute(
+            "SELECT site_name FROM sites WHERE site_name = ?",
+            ('Brand New Creek: Hwy 99',),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        conn.close()
+
+    def test_no_rows_dropped(self):
+        """Mix of known, normalized, and new sites — all 3 rows preserved."""
+        conn = self._make_db()
+        df = pd.DataFrame({
+            'Site_Name': [
+                'Coffee Creek: N. Sooner Rd',       # exact match
+                'Boomer Creek:  3rd Ave.',           # normalized match
+                'Totally New Creek: Main St',        # auto-insert
+            ],
+            'latitude': [35.5, 36.1, 34.0],
+            'longitude': [-97.5, -97.1, -96.0],
+        })
+        resolved_df, stats = resolve_unknown_sites(df, conn)
+        self.assertEqual(len(resolved_df), 3)
+        self.assertEqual(stats['already_known'], 1)
+        self.assertEqual(stats['normalized_match'], 1)
+        self.assertEqual(stats['auto_inserted'], 1)
+        conn.close()
