@@ -215,37 +215,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                 classify_active_sites_in_db,
                 insert_processed_data_to_db,
             )
-            from site_manager import promote_approved_sites, get_pending_site_summary
-
-            # Ensure pending_sites table exists (DB may predate this feature)
-            promote_conn = sqlite3.connect(temp_db.name)
-            try:
-                promote_conn.execute('''
-                    CREATE TABLE IF NOT EXISTS pending_sites (
-                        pending_site_id INTEGER PRIMARY KEY,
-                        site_name TEXT NOT NULL,
-                        latitude REAL,
-                        longitude REAL,
-                        first_seen_date TEXT NOT NULL,
-                        source TEXT DEFAULT 'feature_server',
-                        status TEXT DEFAULT 'pending',
-                        reviewed_date TEXT,
-                        notes TEXT,
-                        nearest_site_name TEXT,
-                        nearest_site_distance_m REAL,
-                        UNIQUE(site_name)
-                    )
-                ''')
-                promote_result = promote_approved_sites(promote_conn)
-                promote_conn.commit()
-                if promote_result['promoted'] > 0:
-                    logger.info(
-                        f"Promoted {promote_result['promoted']} approved sites: "
-                        f"{promote_result['names']}"
-                    )
-            finally:
-                promote_conn.close()
-
             since_date_override, since_datetime_override = _get_feature_server_override(request)
             if since_date_override or since_datetime_override:
                 if since_datetime_override:
@@ -371,13 +340,6 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
                     f"{classification_result['historic_count']} historic"
                 )
 
-            # Query pending site summary before upload (DB gets deleted after)
-            pending_conn = sqlite3.connect(temp_db.name)
-            try:
-                pending_summary = get_pending_site_summary(pending_conn)
-            finally:
-                pending_conn.close()
-
             if not db_manager.upload_database(temp_db.name):
                 raise Exception("Failed to upload updated database")
     finally:
@@ -389,7 +351,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp DB file {temp_db_path}: {e}")
 
-    needs_backfill = bool(insert_result.get('new_pending'))
+    needs_backfill = bool(insert_result.get('new_sites_created'))
     backfill_since_date = None
     if sync_strategy in ('day', 'day_override'):
         backfill_since_date = sync_marker if needs_backfill else None
@@ -411,8 +373,7 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'records_fetched': len(records),
             'records_processed': len(processed_data),
             'records_inserted': insert_result.get('records_inserted', 0),
-            'pending_sites_promoted': promote_result.get('promoted', 0),
-            'new_pending_sites': len(insert_result.get('new_pending', [])),
+            'new_sites_created': insert_result.get('new_sites_created', 0),
             'needs_backfill': needs_backfill,
             'backfill_since_date': backfill_since_date,
         },
@@ -440,14 +401,9 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
             'historic_count': classification_result.get('historic_count', 0)
         }
 
-    # Add pending sites info to response
-    result['pending_sites'] = {
-        'new_pending': len(insert_result.get('new_pending', [])),
-        'total_pending': pending_summary['total_pending'],
-        'promoted': promote_result.get('promoted', 0),
-        'coordinate_matched': insert_result.get('coordinate_matched', 0),
-        'names': insert_result.get('new_pending', []),
-    }
+    new_sites = insert_result.get('new_sites_created', 0)
+    if new_sites:
+        result['new_sites_created'] = new_sites
 
     logger.info(f"FeatureServer sync completed successfully: {result}")
     return result
