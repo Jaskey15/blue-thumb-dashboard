@@ -69,7 +69,7 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 ├── app.py                
 ├── requirements.txt       
 ├── cloud_functions/
-│   └── survey123_sync/    # Automated FeatureServer data sync
+│   └── data_sync/         # Automated FeatureServer data sync
 │       ├── main.py        # Cloud Function entry point
 │       ├── chemical_processor.py
 │       ├── site_manager.py # Auto-resolves unknown sites during sync

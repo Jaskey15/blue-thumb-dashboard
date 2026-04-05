@@ -28,14 +28,14 @@ GCP detected via: `GOOGLE_CLOUD_PROJECT`, `GAE_APPLICATION`, or `K_SERVICE` env 
 
 ## Cloud Function (Data Sync)
 
-Located in `cloud_functions/survey123_sync/`. The directory name is legacy — retained for GCP config compatibility.
+Located in `cloud_functions/data_sync/`.
 
 **Sync strategy:**
 1. First run (no prior sync metadata): fetch by sampling date from DB's latest chemical date
 2. Subsequent runs: fetch by `EditDate` from last successful sync timestamp
 3. Metadata stored at `sync_metadata/last_feature_server_sync.json` in GCS
 
-**Deploy:** `cd cloud_functions/survey123_sync && ./deploy.sh`
+**Deploy:** `cd cloud_functions/data_sync && ./deploy.sh`
 - `deploy.sh` creates staging dir bundling function code + shared project modules
 - Cloud Scheduler triggers daily at 6 AM Central
 

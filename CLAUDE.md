@@ -35,7 +35,7 @@ python app.py    # http://127.0.0.1:8050
 | Add/change chemical parameter | `chemical_utils.py`, `db_schema.py`, `visualization_utils.py` |
 | Add new dashboard tab | `layouts/tabs/`, `callbacks/`, `callbacks/__init__.py` |
 | Modify map behavior | `visualizations/map_viz.py`, `map_queries.py`, `callbacks/overview_callbacks.py` |
-| Update cloud sync | `cloud_functions/survey123_sync/main.py`, `data_processing/arcgis_sync.py` |
+| Update cloud sync | `cloud_functions/data_sync/main.py`, `data_processing/arcgis_sync.py` |
 
 ## Testing
 
