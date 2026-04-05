@@ -60,7 +60,7 @@ class TestSiteRegistration(unittest.TestCase):
 
             import data_processing.arcgis_sync as arcgis_sync
             with patch.object(arcgis_sync, 'fetch_features_since', return_value=[{'objectid': 1}]), \
-                 patch.object(arcgis_sync, 'translate_to_pipeline_schema', return_value=pd.DataFrame({'col': [1]})), \
+                 patch.object(arcgis_sync, 'prepare_dataframe', return_value=pd.DataFrame({'col': [1]})), \
                  patch.object(arcgis_sync, 'process_fetched_data', return_value=pd.DataFrame({'col': [1]})):
 
                 from main import _run_feature_server_sync

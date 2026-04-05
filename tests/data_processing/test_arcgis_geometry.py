@@ -11,11 +11,11 @@ from data_processing.arcgis_sync import _fetch_features_paginated
 
 
 class TestGeometryExtraction(unittest.TestCase):
-    """Verify lat/lon are extracted from FeatureServer geometry."""
+    """Verify geometry handling in _fetch_features_paginated."""
 
     @patch('data_processing.arcgis_sync.requests.get')
-    def test_geometry_extracted_into_attributes(self, mock_get):
-        """Geometry x/y should be injected as longitude/latitude in records."""
+    def test_return_geometry_true_returns_full_feature_dicts(self, mock_get):
+        """With return_geometry=True, records should be full feature dicts."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             'features': [
@@ -32,15 +32,19 @@ class TestGeometryExtraction(unittest.TestCase):
             where="1=1",
             out_fields=['objectid', 'SiteName'],
             order_by_fields='objectid',
+            return_geometry=True,
         )
 
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]['longitude'], -97.5)
-        self.assertEqual(records[0]['latitude'], 35.4)
+        # Full feature dict preserved
+        self.assertIn('attributes', records[0])
+        self.assertIn('geometry', records[0])
+        self.assertEqual(records[0]['geometry']['x'], -97.5)
+        self.assertEqual(records[0]['geometry']['y'], 35.4)
 
     @patch('data_processing.arcgis_sync.requests.get')
-    def test_missing_geometry_gives_none(self, mock_get):
-        """Records without geometry should have latitude/longitude as None."""
+    def test_return_geometry_false_returns_attribute_dicts(self, mock_get):
+        """With return_geometry=False (default), records are flat attribute dicts."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             'features': [
@@ -59,12 +63,12 @@ class TestGeometryExtraction(unittest.TestCase):
         )
 
         self.assertEqual(len(records), 1)
-        self.assertIsNone(records[0]['latitude'])
-        self.assertIsNone(records[0]['longitude'])
+        self.assertEqual(records[0]['objectid'], 2)
+        self.assertNotIn('attributes', records[0])
 
     @patch('data_processing.arcgis_sync.requests.get')
-    def test_return_geometry_param_sent(self, mock_get):
-        """The returnGeometry param should be included in the request."""
+    def test_return_geometry_param_sent_in_request(self, mock_get):
+        """The returnGeometry param should match the argument."""
         mock_response = MagicMock()
         mock_response.json.return_value = {'features': []}
         mock_response.raise_for_status = MagicMock()
@@ -74,11 +78,12 @@ class TestGeometryExtraction(unittest.TestCase):
             where="1=1",
             out_fields=['objectid'],
             order_by_fields='objectid',
+            return_geometry=True,
         )
 
         call_args = mock_get.call_args
         params = call_args.kwargs.get('params') or call_args[1].get('params')
-        self.assertEqual(params.get('returnGeometry'), 'true')
+        self.assertEqual(params.get('returnGeometry'), True)
 
 
 if __name__ == '__main__':

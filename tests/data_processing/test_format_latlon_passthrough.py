@@ -1,4 +1,4 @@
-"""Tests that lat/lon columns survive the chemical processing pipeline."""
+"""Tests that lat/lon columns survive format_to_database_schema in arcgis_sync."""
 import unittest
 import os
 import sys
@@ -8,22 +8,29 @@ import pandas as pd
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
-from data_processing.updated_chemical_processing import format_to_database_schema
+from data_processing.arcgis_sync import format_to_database_schema
 
 
-class TestLatLonPassthrough(unittest.TestCase):
+class TestFormatLatLonPassthrough(unittest.TestCase):
     """Verify latitude/longitude columns are preserved through formatting."""
 
     def _make_sample_df(self, include_coords=True):
-        """Create a minimal valid DataFrame for format_to_database_schema."""
+        """Create a minimal DataFrame matching arcgis_sync's format_to_database_schema input.
+
+        The function expects a DataFrame that has already been through
+        process_fetched_data's earlier stages (parse_epoch_dates, process_simple_nutrients,
+        etc.). So we provide post-processed column names: Date/Year/Month (not 'day'),
+        and API field names that COLUMN_TO_DB will rename (SiteName, oxygen_sat,
+        Orthophosphate). get_ph_worst_case needs pH1 and pH2 columns.
+        """
         data = {
-            'Site Name': ['Test Creek'],
+            'SiteName': ['Test Creek'],
             'Date': [pd.Timestamp('2026-01-15')],
             'Year': [2026],
             'Month': [1],
-            '% Oxygen Saturation': [95.0],
-            'pH #1': [7.2],
-            'pH #2': [7.3],
+            'oxygen_sat': [95.0],
+            'pH1': [7.2],
+            'pH2': [7.3],
             'Nitrate': [1.0],
             'Nitrite': [0.1],
             'Ammonia': [0.5],

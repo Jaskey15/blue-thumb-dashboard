@@ -25,8 +25,9 @@ PROCESSED_DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 os.makedirs(INTERIM_DATA_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
 
-# Defines CSV files and their configurations, ordered from highest to lowest priority for data consolidation.
-CSV_CONFIGS = [
+# CSV files ordered by priority (1-3 high, 5-6 low).
+# Priority 4 is the Feature Server, handled separately in consolidate_sites().
+CSV_CONFIGS_HIGH = [
     {
         'file': 'cleaned_site_data.csv',
         'site_column': 'SiteName',
@@ -57,16 +58,9 @@ CSV_CONFIGS = [
         'ecoregion_column': 'Mod_Ecoregion',
         'description': 'Fish community data'
     },
-    {
-        'file': 'cleaned_updated_chemical_data.csv',
-        'site_column': 'Site Name',
-        'lat_column': 'lat', 
-        'lon_column': 'lon', 
-        'county_column': 'CountyName',
-        'basin_column': None, # Not available in this file
-        'ecoregion_column': None, # Not available in this file
-        'description': 'Updated chemical data'
-    },
+]
+
+CSV_CONFIGS_LOW = [
     {
         'file': 'cleaned_macro_data.csv',
         'site_column': 'SiteName',
@@ -89,6 +83,9 @@ CSV_CONFIGS = [
     }
 ]
 
+# Combined list for verification and iteration (excludes Feature Server source).
+CSV_CONFIGS = CSV_CONFIGS_HIGH + CSV_CONFIGS_LOW
+
 def clean_all_csvs():
     """
     Cleans all raw CSVs by standardizing site names and saves them to the interim directory.
@@ -104,8 +101,7 @@ def clean_all_csvs():
     
     csv_files = [
         'site_data.csv',
-        'chemical_data.csv', 
-        'updated_chemical_data.csv',
+        'chemical_data.csv',
         'fish_data.csv',
         'macro_data.csv',
         'habitat_data.csv',
@@ -117,13 +113,8 @@ def clean_all_csvs():
     
     for input_file in csv_files:
         try:
-            # The 'updated_chemical_data.csv' file has a different structure and encoding.
-            if input_file == 'updated_chemical_data.csv':
-                site_column = 'Site Name'
-                encoding = 'cp1252'
-            else:
-                site_column = 'SiteName'
-                encoding = None
+            site_column = 'SiteName'
+            encoding = None
             
             output_file = f'cleaned_{input_file}'
             description = input_file.replace('_', ' ').replace('.csv', ' data')
@@ -266,32 +257,24 @@ def consolidate_sites():
     
     consolidated_sites = pd.DataFrame()
     conflicts_list = []
-    
-    for i, config in enumerate(CSV_CONFIGS):
-        logger.info(f"\nProcessing priority {i+1}: {config['description']}")
-        
-        csv_sites = extract_sites_from_csv(config)
-        
-        if csv_sites.empty:
-            logger.warning(f"No sites extracted from {config['file']}")
-            continue
-        
+
+    def _merge_sites(site_df, priority_label):
+        """Merge a DataFrame of sites into consolidated_sites."""
+        nonlocal consolidated_sites
         sites_added = 0
         sites_updated = 0
         conflicts_found = 0
-        
-        for _, new_site in csv_sites.iterrows():
+
+        for _, new_site in site_df.iterrows():
             site_name = new_site['site_name']
-            
+
             if not consolidated_sites.empty and site_name in consolidated_sites['site_name'].values:
-                # If site exists, check for conflicts and update missing metadata.
                 existing_idx = consolidated_sites[consolidated_sites['site_name'] == site_name].index[0]
                 existing_site = consolidated_sites.loc[existing_idx]
-                
+
                 conflicts = detect_conflicts(site_name, existing_site, new_site)
-                
+
                 if conflicts:
-                    # Records a conflict if metadata differs between sources.
                     conflict_record = {
                         'site_name': site_name,
                         'conflicts': conflicts,
@@ -303,31 +286,60 @@ def consolidate_sites():
                     conflicts_list.append(conflict_record)
                     conflicts_found += 1
                 else:
-                    # If no conflicts, fill in any missing metadata from the new source.
                     updated = False
                     for field in ['latitude', 'longitude', 'county', 'river_basin', 'ecoregion']:
                         if (pd.isna(existing_site[field]) and pd.notna(new_site[field])):
                             consolidated_sites.loc[existing_idx, field] = new_site[field]
                             consolidated_sites.loc[existing_idx, f'{field}_source'] = new_site['source_file']
                             updated = True
-                    
+
                     if updated:
                         sites_updated += 1
             else:
-                # If site is new, add it to the consolidated data.
                 new_record = new_site.copy()
-                
+
                 for field in ['latitude', 'longitude', 'county', 'river_basin', 'ecoregion']:
                     if pd.notna(new_site[field]):
                         new_record[f'{field}_source'] = new_site['source_file']
                     else:
                         new_record[f'{field}_source'] = None
-                
+
                 consolidated_sites = pd.concat([consolidated_sites, new_record.to_frame().T], ignore_index=True)
                 sites_added += 1
-        
+
         if sites_added > 0 or sites_updated > 0 or conflicts_found > 0:
             logger.info(f"  Added: {sites_added}, Updated: {sites_updated}, Conflicts: {conflicts_found}")
+
+    # Process high-priority CSV sources (priorities 1-3)
+    for i, config in enumerate(CSV_CONFIGS_HIGH):
+        logger.info(f"\nProcessing priority {i+1}: {config['description']}")
+        csv_sites = extract_sites_from_csv(config)
+        if csv_sites.empty:
+            logger.warning(f"No sites extracted from {config['file']}")
+            continue
+        _merge_sites(csv_sites, f"priority {i+1}")
+
+    # Priority 4: Feature Server sites
+    logger.info(f"\nProcessing priority 4: ArcGIS Feature Server")
+    try:
+        from data_processing.arcgis_sync import fetch_site_data
+        fs_sites = fetch_site_data()
+        if not fs_sites.empty:
+            _merge_sites(fs_sites, "priority 4")
+        else:
+            logger.warning("No sites extracted from Feature Server")
+    except Exception as e:
+        logger.warning(f"Feature Server site fetch failed (non-fatal): {e}")
+
+    # Process low-priority CSV sources (priorities 5-6)
+    for i, config in enumerate(CSV_CONFIGS_LOW):
+        priority = i + 5
+        logger.info(f"\nProcessing priority {priority}: {config['description']}")
+        csv_sites = extract_sites_from_csv(config)
+        if csv_sites.empty:
+            logger.warning(f"No sites extracted from {config['file']}")
+            continue
+        _merge_sites(csv_sites, f"priority {priority}")
     
     conflicts_df = pd.DataFrame(conflicts_list) if conflicts_list else pd.DataFrame()
     

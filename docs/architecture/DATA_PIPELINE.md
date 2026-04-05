@@ -5,11 +5,11 @@
 The ETL pipeline must run in this order — each stage depends on the previous:
 
 ```
-1. consolidate_sites.py    → Clean CSVs, create master_sites.csv
+1. consolidate_sites.py    → Clean CSVs, fetch Feature Server sites, create master_sites.csv
 2. site_processing.py      → Load sites into database
 3. merge_sites.py          → Deduplicate sites by coordinate proximity (Haversine clustering)
-4. chemical_processing.py  → Process original chemical data
-5. updated_chemical_processing.py → Process range-based chemical data
+4. chemical_processing.py  → Process original (pre-2020) chemical data from CSV
+5. arcgis_sync.py           → Fetch and process current-period chemical data from Feature Server API
 6. fish_processing.py      → Process fish IBI scores (uses bt_fieldwork_validator)
 7. macro_processing.py     → Process macroinvertebrate assessments
 8. habitat_processing.py   → Process habitat assessments
@@ -17,20 +17,19 @@ The ETL pipeline must run in this order — each stage depends on the previous:
 
 The full pipeline is orchestrated by `database/reset_database.py`.
 
-## Real-Time Data Ingestion
+## Feature Server Chemical Pipeline
 
-In addition to the batch CSV pipeline above, chemical data is also ingested in real-time from the ArcGIS FeatureServer via `data_processing/arcgis_sync.py`. This module:
+`data_processing/arcgis_sync.py` is the primary pipeline for all current-period chemical data. It works directly with API field names — no CSV translation step.
 
-1. Fetches QAQC-verified records from the public FeatureServer REST API (no authentication required)
-2. Translates FeatureServer field names to the CSV column names the existing pipeline expects
-3. Runs translated data through the same chemical processing pipeline as CSV data
-4. Inserts into the database using `sample_id`-based idempotent insertion (prevents duplicates on re-sync)
+**Full rebuild** (`sync_all_chemical_data`): Called by `reset_database.py` to fetch all QAQC-complete records. Replaces the retired `updated_chemical_processing.py`.
+
+**Incremental sync** (`sync_new_chemical_data`): Called by the Cloud Function for daily updates.
 
 Two fetch strategies are supported:
 - **Date-based** (`fetch_features_since`) — fetches by sampling date (`day` field). Used for initial sync.
 - **EditDate-based** (`fetch_features_edited_since`) — fetches by last-edited timestamp. Used for incremental syncs after the first run.
 
-The Cloud Function orchestrates this via `mode=feature_server` (see Deployment docs).
+The Cloud Function orchestrates incremental sync via `mode=feature_server` (see Deployment docs).
 
 ## File Roles
 
@@ -40,10 +39,9 @@ The Cloud Function orchestrates this via `mode=feature_server` (see Deployment d
 | `consolidate_sites.py` | Phase 1: clean raw CSVs → interim/. Phase 2: merge all sites with priority-based metadata resolution |
 | `site_processing.py` | Insert/update sites in DB, classify active vs historic (active = chemical reading within 1 year of most recent) |
 | `merge_sites.py` | Find coordinate duplicates via Haversine distance clustering (50m default threshold, floor-bin + neighbor-bin expansion, union-find transitive grouping). Merge to preferred site, reassign all monitoring data |
-| `chemical_processing.py` | Process `cleaned_chemical_data.csv` — standard single-value chemical measurements |
-| `updated_chemical_processing.py` | Process `cleaned_updated_chemical_data.csv` — newer multi-range format (Low/Mid/High) |
+| `chemical_processing.py` | Process `cleaned_chemical_data.csv` — legacy single-value chemical measurements (pre-2020) |
 | `chemical_utils.py` | Shared chemical constants, validation, BDL conversion, status determination, DB insertion. Supports `sample_id`-based idempotent event insertion |
-| `arcgis_sync.py` | Real-time FeatureServer sync: fetch, translate field names, normalize sites, process, and insert chemical data from the public ArcGIS endpoint |
+| `arcgis_sync.py` | API-first chemical pipeline: fetch, process (using API field names directly), and insert chemical data from the public ArcGIS Feature Server. Handles both full rebuilds and incremental sync |
 | `fish_processing.py` | Fish IBI scores with date correction via `bt_fieldwork_validator` |
 | `bt_fieldwork_validator.py` | Validates fish dates against Blue Thumb field work records, detects replicates vs duplicates |
 | `macro_processing.py` | Macroinvertebrate metrics grouped by (site, sample_id, habitat, season) |
@@ -52,15 +50,12 @@ The Cloud Function orchestrates this via `mode=feature_server` (see Deployment d
 | `data_queries.py` | All database retrieval functions used by the dashboard (pivoted data, status columns, date ranges) |
 | `prepare_chatbot_data.py` | Extracts markdown/text content for Vertex AI chatbot knowledge base |
 
-## Three Chemical Data Pathways
+## Two Chemical Data Pathways
 
-There are three chemical data ingestion pathways:
+- **`chemical_processing.py`** — Legacy CSV format. Single value per parameter. Uses `cleaned_chemical_data.csv` for pre-2020 data.
+- **`arcgis_sync.py`** — API-first pipeline. Fetches current-period data directly from the ArcGIS Feature Server using API field names (no CSV translation). Processes multi-range nutrients (Low/Mid/High), applies range selection logic, pH worst-case, and epoch-to-date conversion. Uses `objectid` as `sample_id` for idempotent insertion.
 
-- **`chemical_processing.py`** — Original CSV format. Single value per parameter. Uses `cleaned_chemical_data.csv`.
-- **`updated_chemical_processing.py`** — Newer CSV format. Parameters measured across Low/Mid/High ranges with a selection column. Uses `cleaned_updated_chemical_data.csv`. Applies range selection logic (e.g., pick greater of two readings, pH furthest from neutral 7.0).
-- **`arcgis_sync.py`** — Real-time FeatureServer sync. Fetches records from the public ArcGIS FeatureServer, translates field names to match the `updated_chemical_processing` pipeline schema, and processes through the same pipeline. Uses `objectid` as `sample_id` for idempotent insertion.
-
-All three pathways share `chemical_utils.py` for validation, BDL handling, and database insertion.
+Both pathways share `chemical_utils.py` for validation, BDL handling, and database insertion.
 
 ## Site Deduplication
 
@@ -70,7 +65,7 @@ Sites with nearly identical coordinates are merged in step 3 of the pipeline (`m
 2. **Distance filtering**: Candidate pairs are filtered by Haversine distance (default threshold: 50m).
 3. **Transitive clustering**: Union-find groups connected pairs transitively — if A is near B and B is near C, all three form one cluster.
 4. **Preferred site selection**: Within each cluster, the preferred site is chosen by priority:
-   - Sites present in `updated_chemical_data` source file (highest priority)
+   - Sites present in `arcgis_feature_server` source (highest priority)
    - Sites present in `chemical_data` source file
    - Longest site name (fallback)
 5. **Merge**: All monitoring data (chemical, fish, macro, habitat) is reassigned from duplicate sites to the preferred site, then duplicates are deleted. Cleaned interim CSVs are updated with the new site name mappings.

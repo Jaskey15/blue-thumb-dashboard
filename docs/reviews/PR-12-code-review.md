@@ -2,117 +2,125 @@
 
 **PR:** Harden FeatureServer ingest + backfill metadata; fix GCS DB refresh
 **Branch:** `fix/feature-server-sync-robust`
-**Files changed:** `chemical_processor.py`, `main.py`, `database.py`, `test_data_processing.py`
-**Date reviewed:** 2026-02-22
-**Automated threshold:** None of the 7 issues scored >= 80/100 (the threshold for automated posting)
+**SHA:** `5af3c4281726daf675104b7d76e979a546d4ff2a`
+**Files changed:** `chemical_processor.py`, `main.py`, `database.py`, `test_data_processing.py` (+615/-39)
+**Date reviewed:** 2026-02-27 (updated from 2026-02-22 review)
+**Review method:** 5 independent agents (CLAUDE.md compliance, bug scan, git history, previous PRs, code comments), followed by per-issue confidence scoring
 
 ---
 
-## Summary
+## PR Summary
 
-PR #12 hardens the FeatureServer realtime ingest pipeline with deterministic site resolution, unknown-site reporting with sample_ids, watermark/backfill safety, a GCS blob generation fix, and enhanced logging. Five independent review passes identified 7 issues — all scored 75 or below, meaning they are worth discussion but did not meet the bar for automated comment posting.
-
----
-
-## Issues Found
-
-### 1. `site_aliases` placed in `chemical_processor.py` instead of `chemical_utils.py` (Score: 75)
-
-**Type:** CLAUDE.md adherence
-**File:** `cloud_functions/survey123_sync/chemical_processor.py`
-
-The `site_aliases` dictionary is hardcoded inside `insert_processed_data_to_db()`. The CLAUDE.md routing table says chemical constants belong in `chemical_utils.py`, and notes that all three chemical data pathways share that module. Embedding aliases in one processor makes them invisible to the other two pathways (`chemical_processing.py`, `updated_chemical_processing.py`).
-
-**CLAUDE.md references:**
-- "Add/change a chemical parameter | `chemical_utils.py` (constants)"
-- "Three chemical data pathways... All share `chemical_utils.py`"
-
-**Recommendation:** Move `site_aliases` and `_normalize_site_name()` to `chemical_utils.py`.
+PR #12 addresses three issues:
+- **#10** — FeatureServer data loss from site name mismatches: adds three-tier site resolution (exact, normalized, alias) with unknown-site reporting
+- **#9** — Cloud Run DB refresh 404 errors: replaces generation-pinned `blob.reload()` with `bucket.get_blob()`
+- **#11** — Cloud Function logging: adds GCS upload failure diagnostics
 
 ---
 
-### 2. Silent no-op exception handling in `_get_feature_server_override` (Score: 75)
+## High-Confidence Issues (Score >= 80)
+
+These issues were verified by multiple independent agents and scored 80+ on the confidence scale.
+
+### 1. Infinite backfill loop with persistent unknown sites (Score: 95)
+
+**Type:** Bug — will occur in production
+**File:** [`main.py` L482-485](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/main.py#L482-L485)
+
+When `sync_strategy='day_backfill'` and records are skipped due to unknown sites, the post-finally metadata block writes `needs_backfill=True` with the same `backfill_since_date`:
+
+```python
+needs_backfill = bool(skipped_unknown_site_records)           # L482
+backfill_since_date = None                                     # L483
+if sync_strategy in ('day', 'day_override', 'day_backfill'):   # L484
+    backfill_since_date = sync_marker if needs_backfill else None  # L485
+```
+
+On the next daily run, the metadata is read (L370-371), `needs_backfill` triggers `day_backfill` strategy (L373-374) with the same date, which fetches the same records, skips the same unknown sites, and writes the same metadata. The PR acknowledges 4 permanently unresolved sites, so this loop will fire on every single daily invocation indefinitely. Data integrity is safe (sample_id idempotency prevents duplicate records), but the Cloud Function will re-download and re-process the full date range every day with no termination condition.
+
+**Recommendation:** Either:
+- (a) Add a `backfill_attempt_count` to metadata and cap retries (e.g., 7 days), advancing the watermark after the cap
+- (b) Don't set `needs_backfill=True` when `sync_strategy == 'day_backfill'` and the same sites are still unresolved (backfill is "done" even if sites remain unknown)
+- (c) Clear `needs_backfill` unconditionally after a `day_backfill` run
+
+---
+
+### 2. Silent no-op exception handlers in `_get_feature_server_override` (Score: 85)
 
 **Type:** Bug / pattern violation
-**File:** `cloud_functions/survey123_sync/main.py`
+**File:** [`main.py` L286-288, L295-297](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/main.py#L286-L297)
 
-Both `except Exception` blocks contain only self-assignments (`since_date = since_date`). These are no-ops that silently swallow exceptions without logging. Every other exception handler in `main.py` calls `logger.warning()` or `logger.error()`. Silent swallowing makes debugging harder in an unattended cloud function.
+Both `except Exception` blocks contain self-assignments that are pure no-ops:
 
 ```python
 except Exception:
-    since_date = since_date       # no-op
-    since_datetime = since_datetime  # no-op
+    since_date = since_date       # no-op: reassigns to itself
+    since_datetime = since_datetime  # no-op: reassigns to itself
 ```
 
-**Recommendation:** Either log the exception at `logger.debug()` level or replace the self-assignments with `pass` to make the intent explicit.
+Any exception from request parsing is silently swallowed with no logging. This contradicts the established pattern in the same file — the `upload_database` method (added in this same PR) uses `logger.error(...)` on every error path. Four of five review agents independently flagged this. An operator passing a malformed override parameter would see no indication of the failure; the sync would silently proceed with no override applied.
+
+**Recommendation:** Replace with either `pass` (to make silent intent explicit) or `logger.debug(f"Error parsing override: {e}")` to match the project's logging convention.
 
 ---
 
-### 3. Test schema missing FK constraint (Score: 75)
+### 3. `_normalize_site_name` closure diverges from `arcgis_sync` version (Score: 85)
 
-**Type:** CLAUDE.md adherence
-**File:** `tests/survey123_sync/test_data_processing.py`
+**Type:** Bug / maintenance hazard
+**File:** [`chemical_processor.py` L149-153](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/chemical_processor.py#L149-L153) vs [`arcgis_sync.py` L101-105](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/data_processing/arcgis_sync.py#L101-L105)
 
-The `_create_minimal_db` helper creates `chemical_collection_events` without a `FOREIGN KEY (site_id) REFERENCES sites(site_id)` constraint. The CLAUDE.md says "Foreign keys enforced" and "all processing tables have foreign keys to `sites`." Other test files (`test_chemical_processor.py`, `test_chemical_processing.py`) include the FK constraint. Without it, a bug that inserts a wrong `site_id` wouldn't be caught by these tests.
+The PR creates a new `_normalize_site_name()` closure inside `insert_processed_data_to_db` that has the same name as the existing function in `arcgis_sync.py` but differs in two ways:
 
-**Recommendation:** Add the FK constraint to the test schema and enable `PRAGMA foreign_keys = ON`.
+| Behavior | `arcgis_sync.py` | `chemical_processor.py` (new) |
+|----------|-------------------|-------------------------------|
+| None/NaN return | `None` | `''` (empty string) |
+| Trailing period | Preserved | Stripped via `.rstrip('.')` |
 
----
+The `arcgis_sync` version was introduced in commit `53b111d` as the canonical normalization function. The PR's new version adds `.rstrip('.')` to handle a real edge case (sites like `SE 34th St.` vs `SE 34th St`) but does so in a private closure that is invisible to the upstream pipeline. Future maintainers seeing `arcgis_sync._normalize_site_name` will assume it is the only normalization, not realizing a divergent copy exists in the Cloud Function.
 
-### 4. Backup failure prevents primary DB upload (Score: 75)
-
-**Type:** Bug
-**File:** `cloud_functions/survey123_sync/main.py`, `upload_database()`
-
-The backup step is wrapped in try/except that re-raises on failure. This means a transient GCS error on the backup path (a non-critical operation) prevents the primary database upload from ever executing. All processed data for that sync cycle is lost. The PR restructures the error handling but preserves this behavior from the original code.
-
-```python
-try:
-    backup_blob.upload_from_string(blob.download_as_string())
-except Exception as e:
-    logger.error(...)
-    raise  # <-- prevents primary upload from executing
-```
-
-**Recommendation:** Catch and log backup failures without re-raising, then proceed with the primary upload. The backup is best-effort; the primary upload is critical.
+**Recommendation:** Consolidate into `chemical_utils.py` as a single shared function. If the `.rstrip('.')` behavior is needed, add it to the canonical version so both pathways benefit.
 
 ---
 
-### 5. Alias misconfiguration is invisible in diagnostics (Score: 25)
+## Medium-Confidence Issues (Score 75)
 
-**Type:** Bug (low probability)
-**File:** `cloud_functions/survey123_sync/chemical_processor.py`
+These are real issues worth discussing but did not meet the 80+ threshold for automated comment posting.
 
-If a site alias's canonical target name doesn't exist in the database (e.g., typo in the alias value), the record silently falls through to the "unknown site" path. The diagnostic output reports the original unresolved name, not the canonical name — so there's no signal that an alias matched but its target wasn't found.
+### 4. `_ensure_gcp_db_ready` not updated to `get_blob` pattern (Score: 75)
 
-**Recommendation:** Log a distinct warning when an alias matches but the canonical lookup fails, so misconfigured aliases are detectable.
+**File:** `database/database.py`, `_ensure_gcp_db_ready()`
 
----
+The PR fixes the generation-pinned blob issue in `_refresh_loop` and `_maybe_refresh_gcp_db_on_request` by switching to `bucket.get_blob()`, but `_ensure_gcp_db_ready` (cold-start initialization) still uses `bucket.blob()` + `blob.exists()` + `blob.reload()`. While this only runs once at startup (reducing practical risk), it's an inconsistency in the same design unit.
 
-### 6. Invalid `since_datetime_override` crashes sync (Score: 75)
+### 5. Invalid `since_datetime_override` propagates raw string (Score: 75)
 
-**Type:** Bug
-**File:** `cloud_functions/survey123_sync/main.py`
+**File:** [`main.py` L338-341](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/main.py#L338-L341)
 
-When an operator passes an unparseable `since_datetime` value (e.g., `?since_datetime=bad-value`), the exception handler assigns the raw string. This raw string flows to `arcgis_sync.fetch_features_edited_since()`, which calls `int(since_datetime)` on non-datetime inputs — raising an uncaught `ValueError` that crashes the entire sync with a 500 error.
+When `datetime.fromisoformat()` fails, `last_sync` is assigned the raw string override. This flows to `fetch_features_edited_since()` and ultimately to `update_sync_timestamp()` which calls `timestamp.isoformat()`, raising `AttributeError`. The surrounding try/except on L489-492 catches the assignment but not the downstream call.
 
-**Code path:**
-1. `_get_feature_server_override()` catches parse failure, keeps raw string
-2. `_run_feature_server_sync()` passes raw string to `fetch_features_edited_since()`
-3. `arcgis_sync.py` line 148: `int(since_datetime)` raises `ValueError`
+### 6. Backup failure prevents primary DB upload (Score: 75)
 
-**Recommendation:** Validate the override value more strictly — if ISO parse fails, discard it and log a warning rather than passing the raw string downstream.
+**File:** [`main.py` L183-191](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/main.py#L183-L191)
 
----
+A transient GCS error on the backup path re-raises and prevents the primary DB upload. This is the pre-existing behavior, but the PR restructures error handling around it without addressing it.
 
-### 7. `day_backfill` infinite loop with persistent unknown sites (Score: 75)
+### 7. `get_last_sync_timestamp` default parameter relaxes safety contract (Score: 75)
 
-**Type:** Bug
-**File:** `cloud_functions/survey123_sync/main.py`
+**File:** [`main.py` L214](https://github.com/Jaskey15/blue-thumb-dashboard/blob/5af3c4281726daf675104b7d76e979a546d4ff2a/cloud_functions/survey123_sync/main.py#L214)
 
-When `sync_strategy='day_backfill'` and records are skipped due to unknown sites, the code writes `needs_backfill=True` with the same `backfill_since_date` back to metadata. On the next daily invocation, it picks `day_backfill` again with the same date and re-fetches the same range. If the unknown sites are never resolved, this repeats indefinitely — each time downloading and processing the same FeatureServer data. Data integrity is safe (sample_id idempotency), but there's no maximum-retry count or "give up and advance" mechanism.
+Adding `metadata_blob_name='sync_metadata/last_sync.json'` as a default means accidentally omitting the argument in the FeatureServer path would silently read the Survey123 metadata blob (wrong watermark). The pre-PR mandatory argument made this impossible.
 
-**Recommendation:** Add a `backfill_attempt_count` to metadata and cap retries (e.g., 7 days). After the cap, advance the watermark and log a final warning with the unresolved site names and sample_ids.
+### 8. Foreign keys not enforced in Cloud Function connections (Score: 75)
+
+**File:** `chemical_processor.py` L131
+
+Uses `sqlite3.connect(db_path)` without `PRAGMA foreign_keys = ON`. CLAUDE.md states "Foreign keys enforced" as a project invariant. The site-resolution logic prevents invalid `site_id` values in practice, but the DB-level constraint is not active.
+
+### 9. Test schema diverges from production (Score: 75)
+
+**File:** `test_data_processing.py`, `_create_minimal_db()`
+
+Test `chemical_collection_events` drops `NOT NULL` constraints and the `FOREIGN KEY`. Test `chemical_measurements` omits `bdl_flag`. These mean tests pass even when production constraints would be violated.
 
 ---
 
@@ -123,6 +131,19 @@ These were investigated and confirmed to not be problems:
 - **Column names** (`Site_Name`, `Date`, etc.) in DataFrames are pre-existing conventions across all three pathways, not raw input columns
 - **`sqlite3.connect()` in Cloud Function** instead of `get_connection()` is the established pattern for CF temp DBs
 - **`database.py` blob fix** (`get_blob()` replacing `blob.reload()`) is a correct improvement
-- **Test queries without `data_queries.py`** — test code tests CF internals, not dashboard retrieval
-- **Previous PR #4 issues** — all three issues from that review (INSERT OR IGNORE, events_added counter, temp file leak) are fully resolved in this PR
-- **`_ensure_gcp_db_ready` still uses `blob.reload()`** — runs only once at startup, stale-blob concern doesn't apply
+- **Previous PR #4 issues** — all three issues from that review (INSERT OR IGNORE, events_added counter, temp file leak) are fully resolved
+- **Module docstring inaccuracies** — low severity, cosmetic
+
+---
+
+## Review Method
+
+Five independent review agents ran in parallel:
+
+1. **CLAUDE.md compliance** — checked all changes against project conventions
+2. **Bug scan** — shallow scan of diff for logic errors, data loss, crashes
+3. **Git history** — checked blame/history for contradictions with previous design decisions
+4. **Previous PRs** — checked PR #4 comments for carry-forward issues (none found)
+5. **Code comments** — checked docstrings and inline comments for contradictions
+
+Each issue was then independently scored (0-100) by a separate agent with access to the PR diff and CLAUDE.md. Only issues scoring 80+ are recommended for posting as PR comments.

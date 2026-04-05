@@ -50,7 +50,6 @@ Consolidate sites from multiple raw CSV files into a single master sites list wi
 **Files Processed:**
 - `site_data.csv` → `cleaned_site_data.csv`
 - `chemical_data.csv` → `cleaned_chemical_data.csv`
-- `updated_chemical_data.csv` → `cleaned_updated_chemical_data.csv`
 - `fish_data.csv` → `cleaned_fish_data.csv`
 - `macro_data.csv` → `cleaned_macro_data.csv`
 - `habitat_data.csv` → `cleaned_habitat_data.csv`
@@ -66,7 +65,7 @@ Consolidate sites from multiple raw CSV files into a single master sites list wi
 1. **Master site data** (`cleaned_site_data.csv`) - Most comprehensive metadata
 2. **Original chemical data** (`cleaned_chemical_data.csv`) - Well-established sites
 3. **Fish community data** (`cleaned_fish_data.csv`) - Biological monitoring sites
-4. **Updated chemical data** (`cleaned_updated_chemical_data.csv`) - Recent additions
+4. **ArcGIS Feature Server** - Current-period chemical sites (fetched via API)
 5. **Macroinvertebrate data** (`cleaned_macro_data.csv`) - Specialized monitoring
 6. **Habitat assessment data** (`cleaned_habitat_data.csv`) - Limited metadata
 
@@ -101,9 +100,9 @@ Identify and merge sites that represent the same physical location but have diff
 
 **When multiple sites share coordinates, keep the site with highest priority:**
 
-1. **Sites in updated_chemical_data** (highest priority)
+1. **Sites in Feature Server** (highest priority)
    - Most recent and actively monitored locations
-2. **Sites in chemical_data**
+2. **Sites in legacy chemical_data CSV**
    - Established monitoring locations
 3. **Longest site name** (fallback)
    - Assumption that longer names are more descriptive

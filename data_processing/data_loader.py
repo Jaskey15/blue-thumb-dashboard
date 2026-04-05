@@ -29,7 +29,6 @@ os.makedirs(INTERIM_DATA_DIR, exist_ok=True)
 DATA_FILES = {
     'site': os.path.join(INTERIM_DATA_DIR, 'cleaned_site_data.csv'),  
     'chemical': os.path.join(INTERIM_DATA_DIR, 'cleaned_chemical_data.csv'),  
-    'updated_chemical': os.path.join(INTERIM_DATA_DIR, 'cleaned_updated_chemical_data.csv'), 
     'fish': os.path.join(INTERIM_DATA_DIR, 'cleaned_fish_data.csv'),  
     'macro': os.path.join(INTERIM_DATA_DIR, 'cleaned_macro_data.csv'),  
     'habitat': os.path.join(INTERIM_DATA_DIR, 'cleaned_habitat_data.csv'),
