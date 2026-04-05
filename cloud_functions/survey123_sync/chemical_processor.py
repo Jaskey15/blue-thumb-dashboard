@@ -112,8 +112,8 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         records_inserted = 0
         has_sample_id = 'sample_id' in df.columns
         has_coords = 'latitude' in df.columns and 'longitude' in df.columns
-        resolved_cache = {}  # site_name -> site_id or None (avoid re-resolving)
-        new_pending_names = []
+        resolved_cache = {}  # site_name -> site_id (avoid re-resolving)
+        new_sites_created = 0
         coordinate_matched = 0
 
         for _, row in df.iterrows():
@@ -131,14 +131,8 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                         site_lookup=site_lookup,
                     )
                     resolved_cache[site_name] = resolved_id
-                    if resolved_id is not None:
-                        coordinate_matched += 1
-                        site_lookup[site_name] = resolved_id
-                    else:
-                        new_pending_names.append(site_name)
-
-                if resolved_id is None:
-                    continue
+                    site_lookup[site_name] = resolved_id
+                    new_sites_created += 1
 
             site_id = site_lookup[site_name]
             date_str = row['Date'].strftime('%Y-%m-%d')
@@ -191,8 +185,8 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
 
         logger.info(f"Successfully inserted {records_inserted} measurements")
         result = {'records_inserted': records_inserted}
-        if new_pending_names:
-            result['new_pending'] = list(set(new_pending_names))
+        if new_sites_created:
+            result['new_sites_created'] = new_sites_created
         if coordinate_matched:
             result['coordinate_matched'] = coordinate_matched
         return result

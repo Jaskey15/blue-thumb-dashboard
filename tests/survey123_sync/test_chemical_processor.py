@@ -307,12 +307,6 @@ class TestUnknownSiteResolution(unittest.TestCase):
                     site_id INTEGER PRIMARY KEY, site_name TEXT NOT NULL UNIQUE,
                     latitude REAL, longitude REAL, county TEXT, river_basin TEXT,
                     ecoregion TEXT, active BOOLEAN DEFAULT 1, last_chemical_reading_date TEXT)''')
-                cursor.execute('''CREATE TABLE pending_sites (
-                    pending_site_id INTEGER PRIMARY KEY, site_name TEXT NOT NULL,
-                    latitude REAL, longitude REAL, first_seen_date TEXT NOT NULL,
-                    source TEXT DEFAULT 'feature_server', status TEXT DEFAULT 'pending',
-                    reviewed_date TEXT, notes TEXT, nearest_site_name TEXT,
-                    nearest_site_distance_m REAL, UNIQUE(site_name))''')
                 cursor.execute('''CREATE TABLE chemical_parameters (
                     parameter_id INTEGER PRIMARY KEY, parameter_name TEXT, parameter_code TEXT,
                     display_name TEXT, unit TEXT, UNIQUE(parameter_code))''')
@@ -368,8 +362,8 @@ class TestUnknownSiteResolution(unittest.TestCase):
             finally:
                 os.unlink(temp_db.name)
 
-    def test_unknown_site_no_match_goes_to_pending(self):
-        """Unknown site far from all existing should be staged in pending_sites."""
+    def test_unknown_site_no_match_auto_inserted(self):
+        """Unknown site far from all existing should be auto-created and data inserted."""
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_db:
             try:
                 conn = sqlite3.connect(temp_db.name)
@@ -379,12 +373,6 @@ class TestUnknownSiteResolution(unittest.TestCase):
                     site_id INTEGER PRIMARY KEY, site_name TEXT NOT NULL UNIQUE,
                     latitude REAL, longitude REAL, county TEXT, river_basin TEXT,
                     ecoregion TEXT, active BOOLEAN DEFAULT 1, last_chemical_reading_date TEXT)''')
-                cursor.execute('''CREATE TABLE pending_sites (
-                    pending_site_id INTEGER PRIMARY KEY, site_name TEXT NOT NULL,
-                    latitude REAL, longitude REAL, first_seen_date TEXT NOT NULL,
-                    source TEXT DEFAULT 'feature_server', status TEXT DEFAULT 'pending',
-                    reviewed_date TEXT, notes TEXT, nearest_site_name TEXT,
-                    nearest_site_distance_m REAL, UNIQUE(site_name))''')
                 cursor.execute('''CREATE TABLE chemical_parameters (
                     parameter_id INTEGER PRIMARY KEY, parameter_name TEXT, parameter_code TEXT,
                     display_name TEXT, unit TEXT, UNIQUE(parameter_code))''')
@@ -426,15 +414,19 @@ class TestUnknownSiteResolution(unittest.TestCase):
                 })
 
                 result = insert_processed_data_to_db(df, temp_db.name)
-                self.assertEqual(result['records_inserted'], 0)
+                self.assertGreater(result['records_inserted'], 0)
 
-                # Verify it ended up in pending_sites
+                # Verify the site was auto-created in the sites table
                 conn = sqlite3.connect(temp_db.name)
                 cursor = conn.cursor()
-                cursor.execute("SELECT site_name, status FROM pending_sites WHERE site_name = 'Far Away Creek'")
+                cursor.execute("SELECT site_id FROM sites WHERE site_name = 'Far Away Creek'")
                 row = cursor.fetchone()
-                self.assertIsNotNone(row)
-                self.assertEqual(row[1], 'pending')
+                self.assertIsNotNone(row, "Far Away Creek should exist in sites table")
+
+                # Verify chemical data was inserted under that site
+                cursor.execute("SELECT site_id FROM chemical_collection_events WHERE sample_id = 888")
+                event_row = cursor.fetchone()
+                self.assertIsNotNone(event_row, "Chemical event for sample_id=888 should exist")
                 conn.close()
             finally:
                 os.unlink(temp_db.name)
