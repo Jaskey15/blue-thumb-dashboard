@@ -4,9 +4,6 @@ FeatureServer Daily Sync Cloud Function
 Automated daily synchronization of chemical data from the public ArcGIS FeatureServer
 with the Blue Thumb Dashboard. Updates SQLite database in Cloud Storage.
 
-NOTE: Entry point name 'survey123_daily_sync' is legacy — retained for GCP config compatibility.
-TODO: Rename to 'data_sync' and update GCP function config.
-
 Environment Variables:
 - GOOGLE_CLOUD_PROJECT: GCP project ID
 - GCS_BUCKET_DATABASE: Cloud Storage bucket for database
@@ -410,15 +407,13 @@ def _run_feature_server_sync(db_manager: 'DatabaseManager', start_time: datetime
 
 
 @functions_framework.http
-def survey123_daily_sync(request):
+def data_sync(request):
     """
     Cloud Function entry point for daily FeatureServer data sync.
 
     Fetches new chemical data from the public ArcGIS FeatureServer and
     updates the SQLite database in Cloud Storage.
 
-    NOTE: Entry point name is legacy — retained for GCP config compatibility.
-    TODO: Rename to 'data_sync' and update GCP function config.
     """
     start_time = datetime.now()
     logger.info(f"Starting FeatureServer data sync at {start_time}")
@@ -442,5 +437,5 @@ if __name__ == "__main__":
     class MockRequest:
         pass
     
-    result = survey123_daily_sync(MockRequest())
+    result = data_sync(MockRequest())
     print(json.dumps(result, indent=2))

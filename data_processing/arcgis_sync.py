@@ -850,7 +850,7 @@ def sync_all_chemical_data(dry_run=False):
     Used by reset_database.py for full database rebuilds. Unlike sync_new_chemical_data()
     which fetches incrementally by date, this fetches everything.
 
-    Note: Site resolution logic here duplicates cloud_functions/survey123_sync/site_manager.py.
+    Note: Site resolution logic here duplicates cloud_functions/data_sync/site_manager.py.
     This local path is intended for one-time DB rebuilds — daily sync is handled by the
     Cloud Function. If this function sees continued use, consider extracting shared
     site resolution into data_processing/site_manager.py.

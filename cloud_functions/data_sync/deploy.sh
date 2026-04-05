@@ -2,13 +2,10 @@
 
 # Deploy FeatureServer Sync Cloud Function
 # This script deploys the daily sync function to Google Cloud
-# TODO: Rename function from survey123-daily-sync to blue-thumb-data-sync
-# TODO: Rename cloud_functions/survey123_sync/ directory to cloud_functions/data_sync/
-
 set -e
 
 # Configuration
-FUNCTION_NAME="survey123-daily-sync"
+FUNCTION_NAME="blue-thumb-data-sync"
 REGION="us-central1"
 RUNTIME="python312"
 MEMORY="512MB"
@@ -55,7 +52,7 @@ gcloud functions deploy $FUNCTION_NAME \
     --runtime=$RUNTIME \
     --region=$REGION \
     --source="$STAGE_DIR" \
-    --entry-point=survey123_daily_sync \
+    --entry-point=data_sync \
     --trigger-http \
     --memory=$MEMORY \
     --timeout=$TIMEOUT \
