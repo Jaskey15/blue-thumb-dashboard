@@ -8,7 +8,7 @@ import time
 import traceback
 from database.database import get_connection, close_connection
 from database.db_schema import create_tables
-from data_processing.consolidate_sites import verify_cleaned_csvs, consolidate_sites_from_csvs
+from data_processing.consolidate_sites import verify_cleaned_csvs, clean_all_csvs, consolidate_sites_from_csvs
 from data_processing.site_processing import process_site_data, classify_active_sites, cleanup_unused_sites
 from data_processing.merge_sites import merge_duplicate_sites
 from data_processing.chemical_processing import load_chemical_data_to_db
@@ -119,8 +119,10 @@ def reload_all_data():
         # Step 1: Ensure all CSVs are cleaned and ready
         csv_status = verify_cleaned_csvs()
         if not csv_status:
-            logger.error("CSV cleaning verification failed. Run consolidate_sites.py first.")
-            return False
+            logger.info("Cleaned CSVs not found, running clean_all_csvs()...")
+            if not clean_all_csvs():
+                logger.error("CSV cleaning failed. Cannot continue.")
+                return False
         
         # Step 2: Consolidate master sites list from all CSV sources
         consolidate_result = consolidate_sites_from_csvs()

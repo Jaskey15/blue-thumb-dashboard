@@ -89,6 +89,7 @@ def create_tables():
         ecoregion TEXT,
         active BOOLEAN DEFAULT 1,
         last_chemical_reading_date TEXT,
+        source_file TEXT,
         UNIQUE(site_name)
     )
     ''')
