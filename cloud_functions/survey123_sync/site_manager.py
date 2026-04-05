@@ -1,16 +1,13 @@
 """
-Site lifecycle management for cloud sync.
+Site resolution for cloud sync.
 
-Handles two responsibilities:
-1. Resolving unknown sites encountered during sync
-   (normalized name → alias → Haversine coords → pending staging)
-2. Promoting approved pending sites to the active sites table
+Resolves unknown sites encountered during sync using a resolution chain:
+normalized name → alias → Haversine coords → auto-insert into sites table.
 """
 
 import logging
 import os
 import sys
-from datetime import datetime
 
 _candidate_root = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
@@ -40,7 +37,7 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn,
     1. Normalized name match (casefold + whitespace normalization)
     2. Alias lookup via SITE_ALIASES
     3. Haversine coordinate match (within 50m)
-    4. Stage to pending_sites if all else fails
+    4. Auto-insert into sites table if all else fails
 
     Args:
         site_name: The unknown site name.
@@ -51,7 +48,7 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn,
         site_lookup: Optional dict of {site_name: site_id} for name-based resolution.
 
     Returns:
-        site_id if resolved, None if staged as pending.
+        site_id (always returns a valid site_id, never None).
     """
     # Step 1: Normalized name match
     if site_lookup:
@@ -81,9 +78,6 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn,
                 return site_id
 
     # Step 3: Haversine coordinate match
-    nearest_name = None
-    nearest_dist = float('inf')
-
     if latitude is not None and longitude is not None:
         for site_id, existing_name, ex_lat, ex_lon in existing_sites:
             if ex_lat is None or ex_lon is None:
@@ -95,92 +89,19 @@ def resolve_unknown_site(site_name, latitude, longitude, existing_sites, conn,
                     f"existing site '{existing_name}' (site_id={site_id})"
                 )
                 return site_id
-            if dist < nearest_dist:
-                nearest_dist = dist
-                nearest_name = existing_name
 
-    # Step 4: Stage as pending
+    # Step 4: Auto-insert into sites table
     cursor = conn.cursor()
-    today = datetime.now().strftime('%Y-%m-%d')
     cursor.execute(
         """
-        INSERT INTO pending_sites
-            (site_name, latitude, longitude, first_seen_date, source, status,
-             nearest_site_name, nearest_site_distance_m)
-        VALUES (?, ?, ?, ?, 'feature_server', 'pending', ?, ?)
-        ON CONFLICT(site_name) DO UPDATE SET
-            latitude = COALESCE(excluded.latitude, pending_sites.latitude),
-            longitude = COALESCE(excluded.longitude, pending_sites.longitude),
-            nearest_site_name = excluded.nearest_site_name,
-            nearest_site_distance_m = excluded.nearest_site_distance_m
+        INSERT OR IGNORE INTO sites (site_name, latitude, longitude, active)
+        VALUES (?, ?, ?, 1)
         """,
-        (
-            site_name,
-            latitude,
-            longitude,
-            today,
-            nearest_name,
-            nearest_dist if nearest_dist != float('inf') else None,
-        ),
+        (site_name, latitude, longitude),
     )
-    if cursor.rowcount > 0:
-        logger.info(
-            f"Staged new pending site: '{site_name}' "
-            f"(nearest: '{nearest_name}' at {nearest_dist:.0f}m)"
-            if nearest_name
-            else f"Staged new pending site: '{site_name}' (no coordinates for distance check)"
-        )
-    return None
-
-
-def promote_approved_sites(conn):
-    """Move approved pending sites into the sites table.
-
-    Args:
-        conn: SQLite connection. Caller is responsible for committing.
-
-    Returns:
-        Dict with 'promoted' count and 'names' list.
-    """
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT site_name, latitude, longitude FROM pending_sites WHERE status = 'approved'"
+    cursor.execute("SELECT site_id FROM sites WHERE site_name = ?", (site_name,))
+    new_site_id = cursor.fetchone()[0]
+    logger.info(
+        f"Auto-inserted new site: '{site_name}' (site_id={new_site_id})"
     )
-    approved = cursor.fetchall()
-
-    promoted_names = []
-    for site_name, lat, lon in approved:
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO sites (site_name, latitude, longitude, active)
-            VALUES (?, ?, ?, 1)
-            """,
-            (site_name, lat, lon),
-        )
-        if cursor.rowcount > 0:
-            promoted_names.append(site_name)
-            logger.info(f"Promoted pending site to sites table: '{site_name}'")
-
-    if promoted_names:
-        cursor.execute(
-            "UPDATE pending_sites SET status = 'promoted', reviewed_date = ? "
-            "WHERE status = 'approved'",
-            (datetime.now().strftime('%Y-%m-%d'),),
-        )
-
-    return {'promoted': len(promoted_names), 'names': promoted_names}
-
-
-def get_pending_site_summary(conn):
-    """Get a summary of pending sites for the sync response.
-
-    Args:
-        conn: SQLite connection.
-
-    Returns:
-        Dict with total_pending count.
-    """
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM pending_sites WHERE status = 'pending'")
-    total = cursor.fetchone()[0]
-    return {'total_pending': total}
+    return new_site_id
