@@ -36,6 +36,7 @@ trap cleanup EXIT
 
 cp "$SCRIPT_DIR/main.py" "$STAGE_DIR/main.py"
 cp "$SCRIPT_DIR/chemical_processor.py" "$STAGE_DIR/chemical_processor.py"
+cp "$SCRIPT_DIR/site_manager.py" "$STAGE_DIR/site_manager.py"
 cp "$SCRIPT_DIR/requirements.txt" "$STAGE_DIR/requirements.txt"
 
 cp "$REPO_ROOT/utils.py" "$STAGE_DIR/utils.py"
