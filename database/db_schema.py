@@ -280,24 +280,6 @@ def create_tables():
     )
     ''')
 
-    # ---------- PENDING SITES TABLE ----------
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS pending_sites (
-        pending_site_id INTEGER PRIMARY KEY,
-        site_name TEXT NOT NULL,
-        latitude REAL,
-        longitude REAL,
-        first_seen_date TEXT NOT NULL,
-        source TEXT DEFAULT 'feature_server',
-        status TEXT DEFAULT 'pending',
-        reviewed_date TEXT,
-        notes TEXT,
-        nearest_site_name TEXT,
-        nearest_site_distance_m REAL,
-        UNIQUE(site_name)
-    )
-    ''')
-
     # Create database indexes to optimize map queries by site, date, and season
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chemical_site_date ON chemical_collection_events(site_id, collection_date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chemical_measurements ON chemical_measurements(event_id, parameter_id)')
