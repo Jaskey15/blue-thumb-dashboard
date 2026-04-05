@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
-from data_processing.chemical_utils import normalize_site_name
-
 try:
     from data_processing import setup_logging
 except ModuleNotFoundError:
@@ -32,6 +30,7 @@ from data_processing.chemical_utils import (
     apply_bdl_conversions,
     calculate_soluble_nitrogen,
     insert_chemical_data,
+    normalize_site_name,
     remove_empty_chemical_rows,
     validate_chemical_data,
 )
@@ -851,6 +850,11 @@ def sync_all_chemical_data(dry_run=False):
     Used by reset_database.py for full database rebuilds. Unlike sync_new_chemical_data()
     which fetches incrementally by date, this fetches everything.
 
+    Note: Site resolution logic here duplicates cloud_functions/survey123_sync/site_manager.py.
+    This local path is intended for one-time DB rebuilds — daily sync is handled by the
+    Cloud Function. If this function sees continued use, consider extracting shared
+    site resolution into data_processing/site_manager.py.
+
     Args:
         dry_run: If True, fetch and process but skip database insertion.
 
@@ -864,6 +868,7 @@ def sync_all_chemical_data(dry_run=False):
         where="QAQC_Complete IS NOT NULL",
         out_fields=CHEMICAL_FIELDS,
         order_by_fields='day ASC',
+        return_geometry=True,
     )
 
     if not records:
@@ -895,29 +900,33 @@ def sync_all_chemical_data(dry_run=False):
             'execution_time': str(datetime.now() - start_time),
         }
 
-    filtered_df, skipped_sites = filter_known_sites(processed_df)
+    conn = get_connection()
+    try:
+        resolved_df, site_stats = resolve_unknown_sites(processed_df, conn)
+    finally:
+        close_connection(conn)
 
     if dry_run:
-        logger.info(f"DRY RUN: would insert {len(filtered_df)} records")
+        logger.info(f"DRY RUN: would insert {len(resolved_df)} records")
         return {
             'status': 'dry_run',
             'records_fetched': len(records),
             'records_after_processing': len(processed_df),
-            'records_ready': len(filtered_df),
-            'skipped_sites': skipped_sites,
+            'records_ready': len(resolved_df),
+            'site_resolution': site_stats,
             'execution_time': str(datetime.now() - start_time),
         }
 
-    if filtered_df.empty:
+    if resolved_df.empty:
         return {
             'status': 'success',
             'records_fetched': len(records),
             'records_inserted': 0,
-            'skipped_sites': skipped_sites,
+            'site_resolution': site_stats,
             'execution_time': str(datetime.now() - start_time),
         }
 
-    stats = insert_chemical_data(filtered_df, data_source="arcgis_feature_server")
+    stats = insert_chemical_data(resolved_df, data_source="arcgis_feature_server")
 
     result = {
         'status': 'success',
@@ -926,7 +935,8 @@ def sync_all_chemical_data(dry_run=False):
         'records_inserted': stats.get('measurements_added', 0),
         'events_added': stats.get('events_added', 0),
         'sites_processed': stats.get('sites_processed', 0),
-        'skipped_sites': skipped_sites,
+        'sites_auto_inserted': site_stats.get('auto_inserted', 0),
+        'site_resolution': site_stats,
         'execution_time': str(datetime.now() - start_time),
     }
 

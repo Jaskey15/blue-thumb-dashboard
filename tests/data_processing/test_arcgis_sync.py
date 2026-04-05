@@ -1,5 +1,6 @@
 """Tests for the API-first chemical data pipeline in arcgis_sync.py."""
 
+import sqlite3
 import unittest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
@@ -136,21 +137,29 @@ class TestSyncAllChemicalData(unittest.TestCase):
     """Tests for the full-fetch entry point."""
 
     @patch('data_processing.arcgis_sync.insert_chemical_data')
-    @patch('data_processing.arcgis_sync.filter_known_sites')
+    @patch('data_processing.arcgis_sync.resolve_unknown_sites')
+    @patch('data_processing.arcgis_sync.close_connection')
+    @patch('data_processing.arcgis_sync.get_connection')
     @patch('data_processing.arcgis_sync.process_fetched_data')
     @patch('data_processing.arcgis_sync.prepare_dataframe')
     @patch('data_processing.arcgis_sync._fetch_features_paginated')
-    def test_full_sync_pipeline(self, mock_fetch, mock_prepare, mock_process, mock_filter, mock_insert):
+    def test_full_sync_pipeline(self, mock_fetch, mock_prepare, mock_process,
+                                mock_conn, mock_close, mock_resolve, mock_insert):
         mock_fetch.return_value = [{'objectid': 1}]
         mock_prepare.return_value = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
         mock_process.return_value = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
-        mock_filter.return_value = (pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']}), [])
+        resolved_df = pd.DataFrame({'Site_Name': ['Test'], 'Date': ['2025-01-01']})
+        mock_resolve.return_value = (resolved_df, {
+            'already_known': 1, 'normalized_match': 0, 'alias_match': 0,
+            'coordinate_match': 0, 'auto_inserted': 0,
+        })
         mock_insert.return_value = {'measurements_added': 1, 'events_added': 1, 'sites_processed': 1}
 
         result = sync_all_chemical_data()
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['records_inserted'], 1)
         mock_fetch.assert_called_once()
+        mock_resolve.assert_called_once()
 
     @patch('data_processing.arcgis_sync._fetch_features_paginated')
     def test_empty_fetch_returns_zero(self, mock_fetch):
@@ -324,4 +333,103 @@ class TestResolveUnknownSites(unittest.TestCase):
         self.assertEqual(stats['already_known'], 1)
         self.assertEqual(stats['normalized_match'], 1)
         self.assertEqual(stats['auto_inserted'], 1)
+        conn.close()
+
+
+class TestSyncAllResolvesUnknownSites(unittest.TestCase):
+    """Integration test: sync_all_chemical_data uses resolve_unknown_sites."""
+
+    def _make_db(self):
+        """Create in-memory DB with sites table and one known site."""
+        conn = sqlite3.connect(':memory:')
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE sites (
+                site_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_name TEXT NOT NULL UNIQUE,
+                latitude REAL, longitude REAL,
+                active INTEGER DEFAULT 1, source_file TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO sites (site_name, latitude, longitude) VALUES (?, ?, ?)",
+            ('Known Creek: Main St', 35.5, -97.5),
+        )
+        conn.commit()
+        return conn
+
+    def _make_feature(self, objectid, site_name, x, y):
+        """Build a full feature dict like _fetch_features_paginated returns."""
+        return {
+            'attributes': {
+                'objectid': objectid,
+                'SiteName': site_name,
+                'day': 1742025600000,
+                'oxygen_sat': 95,
+                'pH1': 7.0, 'pH2': 7.1,
+                'nitratetest1': 0.5, 'nitratetest2': 0.6,
+                'nitritetest1': 0.01, 'nitritetest2': 0.02,
+                'Ammonia_Range': 'Low',
+                'ammonia_Nitrogen2': 0.1, 'ammonia_Nitrogen3': 0.1,
+                'Ammonia_nitrogen_midrange1_Final': None,
+                'Ammonia_nitrogen_midrange2_Final': None,
+                'Ortho_Range': 'Low',
+                'Orthophosphate_Low1_Final': 0.02,
+                'Orthophosphate_Low2_Final': 0.02,
+                'Orthophosphate_Mid1_Final': None,
+                'Orthophosphate_Mid2_Final': None,
+                'Orthophosphate_High1_Final': None,
+                'Orthophosphate_High2_Final': None,
+                'Chloride_Range': 'Low',
+                'Chloride_Low1_Final': 10, 'Chloride_Low2_Final': 10,
+                'Chloride_High1_Final': None, 'Chloride_High2_Final': None,
+                'QAQC_Complete': 'X',
+            },
+            'geometry': {'x': x, 'y': y},
+        }
+
+    @patch('data_processing.arcgis_sync.insert_chemical_data')
+    @patch('data_processing.arcgis_sync.close_connection')
+    @patch('data_processing.arcgis_sync.get_connection')
+    @patch('data_processing.arcgis_sync._fetch_features_paginated')
+    def test_unknown_site_auto_inserted(self, mock_fetch, mock_get_conn,
+                                        mock_close_conn, mock_insert):
+        """Unknown site is auto-inserted, not dropped."""
+        conn = self._make_db()
+
+        mock_fetch.return_value = [
+            self._make_feature(1, 'Known Creek: Main St', -97.5, 35.5),
+            self._make_feature(2, 'Brand New Creek: Hwy 99', -96.0, 34.0),
+        ]
+        mock_get_conn.return_value = conn
+        mock_close_conn.side_effect = lambda c: None  # don't close the in-memory DB
+        mock_insert.return_value = {
+            'measurements_added': 10,
+            'events_added': 2,
+            'sites_processed': 2,
+        }
+
+        result = sync_all_chemical_data(dry_run=False)
+
+        # Both rows should reach insert_chemical_data (none dropped)
+        insert_call_df = mock_insert.call_args[0][0]
+        self.assertEqual(len(insert_call_df), 2)
+
+        # Unknown site was auto-inserted
+        self.assertEqual(result['sites_auto_inserted'], 1)
+        self.assertIn('site_resolution', result)
+        self.assertEqual(result['site_resolution']['auto_inserted'], 1)
+
+        # Verify the unknown site is now in the DB
+        row = conn.execute(
+            "SELECT site_name FROM sites WHERE site_name = ?",
+            ('Brand New Creek: Hwy 99',),
+        ).fetchone()
+        self.assertIsNotNone(row)
+
+        # geometry was requested
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args[1]
+        self.assertTrue(call_kwargs.get('return_geometry'))
+
         conn.close()
