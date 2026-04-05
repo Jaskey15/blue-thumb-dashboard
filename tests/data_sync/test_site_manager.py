@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'cloud_functions', 'survey123_sync'))
+sys.path.insert(0, os.path.join(project_root, 'cloud_functions', 'data_sync'))
 
 # Mock Cloud Function specific modules
 sys.modules['functions_framework'] = MagicMock()
