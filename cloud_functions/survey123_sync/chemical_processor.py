@@ -114,7 +114,7 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         has_coords = 'latitude' in df.columns and 'longitude' in df.columns
         resolved_cache = {}  # site_name -> site_id (avoid re-resolving)
         new_sites_created = 0
-        coordinate_matched = 0
+        existing_site_ids = set(site_lookup.values())
 
         for _, row in df.iterrows():
             site_name = row['Site_Name']
@@ -132,7 +132,9 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
                     )
                     resolved_cache[site_name] = resolved_id
                     site_lookup[site_name] = resolved_id
-                    new_sites_created += 1
+                    if resolved_id not in existing_site_ids:
+                        new_sites_created += 1
+                        existing_site_ids.add(resolved_id)
 
             site_id = site_lookup[site_name]
             date_str = row['Date'].strftime('%Y-%m-%d')
@@ -187,8 +189,6 @@ def insert_processed_data_to_db(df: pd.DataFrame, db_path: str) -> Dict[str, Any
         result = {'records_inserted': records_inserted}
         if new_sites_created:
             result['new_sites_created'] = new_sites_created
-        if coordinate_matched:
-            result['coordinate_matched'] = coordinate_matched
         return result
 
     except Exception as e:
