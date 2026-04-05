@@ -101,7 +101,6 @@ This project transforms complex water quality datasets from Oklahoma's Blue Thum
 │   ├── raw/            # Source CSV files (not included — see Data Access)
 │   ├── interim/        # Cleaned and validated data
 │   └── processed/      # Database-ready outputs
-│       └── chatbot_data/ # AI knowledge base content
 ├── text/              
 └── assets/           
 ```
