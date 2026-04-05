@@ -26,12 +26,10 @@ logs/
 cache/
 *.pkl
 
-# Database files 
+# Database files (downloaded from GCS at runtime)
 *.db
 *.sqlite
 *.sqlite3
-# Allow the main project database
-!database/blue_thumb.db
 
 # Environment variables and secrets
 .env

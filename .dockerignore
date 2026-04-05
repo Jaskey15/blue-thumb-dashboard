@@ -41,8 +41,8 @@ cache/
 *.pkl
 .cache/
 
-# Database files (we'll use environment-specific paths)
-*.db
+# Database files (downloaded from GCS at runtime)
+**/*.db
 
 # Build artifacts
 dist/
