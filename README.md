@@ -1,5 +1,7 @@
 # Blue Thumb Water Quality Dashboard
 
+![Blue Thumb Dashboard — interactive statewide map of 370+ stream monitoring sites colored by dissolved oxygen status, with an AI stream health assistant](docs/images/dashboard-preview.png)
+
 ## Overview
 
 This project transforms complex water quality datasets from Oklahoma's Blue Thumb volunteer monitoring program into accessible, interactive visualizations that help communicate stream health across Oklahoma's watersheds. With data from **370+ monitoring sites**, the dashboard provides comprehensive statewide coverage enhanced by automated cloud processing and AI-powered assistance.
