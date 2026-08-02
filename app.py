@@ -34,6 +34,18 @@ app = dash.Dash(__name__,
                 ])
 server = app.server
 
+
+@server.route("/health")
+def health():
+    """Keepalive target for Cloud Scheduler.
+
+    Deliberately cheap: no database access, no layout rendering. Pinging this
+    keeps an instance resident so visitors avoid the ~5s cold start, without
+    the cost of running min-instances=1.
+    """
+    return {"status": "ok"}, 200
+
+
 # Responsive header with background image overlay
 header = dbc.Container([
     dbc.Row([
